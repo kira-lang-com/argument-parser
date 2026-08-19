@@ -1,0 +1,71 @@
+import Foundation
+
+// `@Derive(Parsable)` is the typed half of the parser.
+//
+// The runtime parser intentionally works with a small, backend-neutral
+// `ParsedArguments` value. This derive walks a command's fields at compile time
+// and emits the constructor that projects those raw values into the user's
+// domain type. It is the Kira equivalent of Swift ArgumentParser synthesizing
+// a ParsableArguments implementation from property wrappers.
+//
+// The supported field vocabulary is deliberately explicit in v1:
+// String/Int/Float/Bool project through scalar accessors, while
+// [String]/[Int]/[Float]
+// project repeated options through collection accessors. The command schema
+// still decides spelling, requiredness, defaults, aliases, and help text, so
+// the derived function never guesses about the CLI surface.
+
+comptime macro Parsable {
+    kind { derive }
+    appliesTo { struct }
+    expand(target: Declaration) -> Syntax {
+        var initializers: [Syntax] = []
+        var supported = true
+        for field in target.fields {
+            if field.type == "String" {
+                initializers.append(quote {
+                    #{field.name}: valueText(raw, #{field.name.asString()})
+                })
+            } else if field.type == "Int" {
+                initializers.append(quote {
+                    #{field.name}: valueInt(raw, #{field.name.asString()})
+                })
+            } else if field.type == "Float" {
+                initializers.append(quote {
+                    #{field.name}: valueFloat(raw, #{field.name.asString()})
+                })
+            } else if field.type == "Bool" {
+                initializers.append(quote {
+                    #{field.name}: valueBool(raw, #{field.name.asString()})
+                })
+            } else if field.type == "[String]" {
+                initializers.append(quote {
+                    #{field.name}: valuesText(raw, #{field.name.asString()})
+                })
+            } else if field.type == "[Int]" {
+                initializers.append(quote {
+                    #{field.name}: valuesInt(raw, #{field.name.asString()})
+                })
+            } else if field.type == "[Float]" {
+                initializers.append(quote {
+                    #{field.name}: valuesFloat(raw, #{field.name.asString()})
+                })
+            } else {
+                supported = false
+                Diagnostics.error(
+                    "Derive(Parsable) supports String, Int, Float, Bool, [String], [Int], and [Float] fields; this field has another type",
+                    at: field.syntax
+                )
+            }
+        }
+        if !supported {
+            return quote { }
+        }
+        let fields: Syntax = Syntax.join(initializers, separator: ", ")
+        return quote {
+            function parse_#{target.name}(raw: borrow ParsedArguments) -> #{target.name} {
+                return #{target.name} { #{fields} }
+            }
+        }
+    }
+}

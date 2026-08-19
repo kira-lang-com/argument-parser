@@ -1,0 +1,383 @@
+import Foundation
+import ArgumentParser
+
+// A real, file-backed CLI rather than a parser showcase: kira-audit walks a
+// workspace, checks its package manifest, and explains individual files. The
+// command declarations exercise the same composition Swift ArgumentParser is
+// designed for: derived typed arguments, independent subcommands, aliases,
+// defaults, choices, repeated options, and generated help.
+
+@Derive(Parsable)
+struct ScanArguments {
+    let path: String
+    let maxDepth: Int
+    let format: String
+    let includeHidden: Bool
+    let exclude: [String]
+    let strict: Bool
+}
+
+@Derive(Parsable)
+struct CheckArguments {
+    let path: String
+    let format: String
+    let strict: Bool
+}
+
+@Derive(Parsable)
+struct ExplainArguments {
+    let path: String
+    let lines: Int
+    let raw: Bool
+}
+
+struct ScanSummary {
+    var files: Int = 0
+    var directories: Int = 0
+    var bytes: U64 = 0
+    var kiraFiles: Int = 0
+}
+
+function joinPath(base: borrow String, name: borrow String) -> String {
+    if base.count == 0 {
+        return name
+    }
+    let last = base.charAt(base.count - 1)
+    if last == 47 || last == 92 {
+        return base + name
+    }
+    return base + "/" + name
+}
+
+function hasSuffix(text: borrow String, suffix: borrow String) -> Bool {
+    if text.count < suffix.count {
+        return false
+    }
+    return text.substring(text.count - suffix.count, text.count) == suffix
+}
+
+function isHiddenName(name: borrow String) -> Bool {
+    return name.count > 0 && name.charAt(0) == 46
+}
+
+function isExcluded(name: borrow String, excluded: borrow [String]) -> Bool {
+    for wanted in excluded {
+        if name == wanted {
+            return true
+        }
+    }
+    return false
+}
+
+function mergeSummary(left: borrow ScanSummary, right: borrow ScanSummary) -> ScanSummary {
+    return ScanSummary {
+        files: left.files + right.files
+        directories: left.directories + right.directories
+        bytes: left.bytes + right.bytes
+        kiraFiles: left.kiraFiles + right.kiraFiles
+    }
+}
+
+function scanPath(
+    path: borrow String,
+    depth: Int,
+    maxDepth: Int,
+    includeHidden: Bool,
+    excluded: borrow [String]
+) -> ScanSummary {
+    if fileExists(path) {
+        var kiraCount = 0
+        if hasSuffix(path, ".kira") {
+            kiraCount = 1
+        }
+        return ScanSummary {
+            files: 1
+            directories: 0
+            bytes: fileSize(path)
+            kiraFiles: kiraCount
+        }
+    }
+
+    if !isDirectory(path) {
+        return ScanSummary {}
+    }
+
+    var result = ScanSummary {
+        files: 0
+        directories: 1
+        bytes: 0
+        kiraFiles: 0
+    }
+    if depth >= maxDepth {
+        return result
+    }
+
+    let listing = listDirectory(path)
+    var index = 0
+    while index < listing.count() {
+        let name = listing.entry(index)
+        if (includeHidden || !isHiddenName(name)) && !isExcluded(name, excluded) {
+            let child = joinPath(path, name)
+            let childSummary = scanPath(child, depth + 1, maxDepth, includeHidden, excluded)
+            result = mergeSummary(result, childSummary)
+        }
+        index = index + 1
+    }
+    return result
+}
+
+function jsonText(text: borrow String) -> String {
+    return "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+}
+
+function renderScanText(path: borrow String, summary: borrow ScanSummary) {
+    print("path: " + path)
+    print("directories: " + String(summary.directories))
+    print("files: " + String(summary.files))
+    print("kira files: " + String(summary.kiraFiles))
+    print("bytes: " + String(summary.bytes))
+    return
+}
+
+function renderScanJson(path: borrow String, summary: borrow ScanSummary) {
+    print(
+        "{\"path\":" + jsonText(path) +
+        ",\"directories\":" + String(summary.directories) +
+        ",\"files\":" + String(summary.files) +
+        ",\"kiraFiles\":" + String(summary.kiraFiles) +
+        ",\"bytes\":" + String(summary.bytes) + "}"
+    )
+    return
+}
+
+function countLines(text: borrow String) -> Int {
+    if text.count == 0 {
+        return 0
+    }
+    var lines = 0
+    var index = 0
+    while index < text.count {
+        if text.charAt(index) == 10 {
+            lines = lines + 1
+        }
+        index = index + 1
+    }
+    if text.charAt(text.count - 1) != 10 {
+        lines = lines + 1
+    }
+    return lines
+}
+
+function previewLines(text: borrow String, maximum: Int) -> String {
+    if maximum <= 0 || text.count == 0 {
+        return ""
+    }
+
+    var result = ""
+    var start = 0
+    var line = 0
+    var index = 0
+    while index < text.count && line < maximum {
+        if text.charAt(index) == 10 {
+            result = result + text.substring(start, index) + "\n"
+            start = index + 1
+            line = line + 1
+        }
+        index = index + 1
+    }
+    if line < maximum && start < text.count {
+        result = result + text.substring(start, text.count)
+    }
+    return result
+}
+
+function manifestIsValid(text: borrow String, strict: Bool) -> Bool {
+    if !text.contains("Package ") || !text.contains("let kind = .") {
+        return false
+    }
+    if strict && !text.contains("let version = ") {
+        return false
+    }
+    return true
+}
+
+ParsableCommand RootCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration(
+            name: "kira-audit",
+            aliases: ["audit"],
+            abstract: "Inspect a Kira workspace from the command line",
+            discussion: "Walk source trees, validate package.kira, or inspect a file without leaving the shell.",
+            version: "0.1.0",
+            subcommands: ["scan", "check", "explain"],
+            defaultSubcommand: "scan"
+        )
+    }
+
+    let arguments: [ArgumentSpec] {
+        return []
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Int {
+        print("kira-audit: choose scan, check, or explain")
+        return 0
+    }
+}
+
+ParsableCommand ScanCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration(
+            name: "scan",
+            aliases: ["s"],
+            abstract: "Summarize a workspace tree"
+        )
+    }
+
+    let arguments: [ArgumentSpec] {
+        return [
+            optionalArgument(name: "path", help: "Directory or file to inspect", defaultText: "."),
+            optionalIntegerOptionWithAliases(
+                name: "maxDepth",
+                shortName: "d",
+                aliases: ["max-depth"],
+                defaultText: "2",
+                help: "Maximum directory depth to walk"
+            ),
+            optionalChoiceOption(
+                name: "format",
+                shortName: "f",
+                choices: ["text", "json"],
+                defaultText: "text",
+                help: "Output format"
+            ),
+            flagWithAliases(
+                name: "includeHidden",
+                shortName: "H",
+                aliases: ["hidden"],
+                help: "Include dot-prefixed entries"
+            ),
+            repeatedOptionWithAliases(
+                name: "exclude",
+                shortName: "e",
+                aliases: ["ignore"],
+                help: "Skip an entry name; may be repeated"
+            ),
+            flag(name: "strict", shortName: "S", help: "Require at least one Kira source file")
+        ]
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Int {
+        let parsed = parse_ScanArguments(arguments)
+        if !pathExists(parsed.path) {
+            print("error: path does not exist: " + parsed.path)
+            return 2
+        }
+        if parsed.maxDepth < 0 {
+            print("error: max-depth must be non-negative")
+            return 2
+        }
+
+        let summary = scanPath(parsed.path, 0, parsed.maxDepth, parsed.includeHidden, parsed.exclude)
+        if parsed.format == "json" {
+            renderScanJson(parsed.path, summary)
+        } else {
+            renderScanText(parsed.path, summary)
+        }
+        if parsed.strict && summary.kiraFiles == 0 {
+            print("error: no .kira source files found")
+            return 1
+        }
+        return 0
+    }
+}
+
+ParsableCommand CheckCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration(
+            name: "check",
+            aliases: ["c"],
+            abstract: "Validate a package.kira manifest"
+        )
+    }
+
+    let arguments: [ArgumentSpec] {
+        return [
+            optionalArgument(name: "path", help: "Package directory", defaultText: "."),
+            optionalChoiceOption(
+                name: "format",
+                shortName: "f",
+                choices: ["text", "json"],
+                defaultText: "text",
+                help: "Output format"
+            ),
+            flag(name: "strict", shortName: "S", help: "Require a version declaration")
+        ]
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Int {
+        let parsed = parse_CheckArguments(arguments)
+        let manifestPath = joinPath(parsed.path, "package.kira")
+        let manifest = readFile(manifestPath)
+        let valid = manifest.ok && manifestIsValid(manifest.text, parsed.strict)
+        if parsed.format == "json" {
+            print(
+                "{\"path\":" + jsonText(manifestPath) +
+                ",\"valid\":" + String(valid) +
+                ",\"bytes\":" + String(manifest.size) + "}"
+            )
+        } else if valid {
+            print("valid: " + manifestPath)
+            print("bytes: " + String(manifest.size))
+        } else {
+            print("invalid: " + manifestPath)
+            print("expected a Package declaration and a kind declaration")
+            return 1
+        }
+        return 0
+    }
+}
+
+ParsableCommand ExplainCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration(
+            name: "explain",
+            aliases: ["why"],
+            abstract: "Inspect one source file"
+        )
+    }
+
+    let arguments: [ArgumentSpec] {
+        return [
+            argument(name: "path", help: "File to inspect"),
+            optionalIntegerOption(name: "lines", shortName: "n", defaultText: "8", help: "Number of lines to preview"),
+            flag(name: "raw", shortName: "r", help: "Print the complete file")
+        ]
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Int {
+        let parsed = parse_ExplainArguments(arguments)
+        let file = readFile(parsed.path)
+        if !file.ok {
+            print("error: cannot read file: " + parsed.path)
+            return 2
+        }
+        print("path: " + parsed.path)
+        print("bytes: " + String(file.size))
+        print("lines: " + String(countLines(file.text)))
+        if parsed.raw {
+            print(file.text)
+        } else {
+            print("preview:")
+            print(previewLines(file.text, parsed.lines))
+        }
+        return 0
+    }
+}
+
+@Main
+function main() {
+    let root = RootCommand()
+    let children: [Any ParsableCommand] = [ScanCommand(), CheckCommand(), ExplainCommand()]
+    runCommandRouter(root, children, commandLineArguments())
+    return
+}

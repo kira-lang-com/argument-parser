@@ -1,0 +1,1219 @@
+import Foundation
+
+// ArgumentParser is a value-oriented command-line toolkit for Kira.
+//
+// The surface deliberately follows Swift ArgumentParser's vocabulary:
+// commands have a configuration, fields are described as arguments/options/
+// flags, parsing returns a typed Result, and help is generated from the same
+// model that performs validation. `commandLineArguments()` bridges the real
+// compiled process into the same ordinary [String] token stream, while a host
+// or test can still pass its own tokens to `parse` deterministically.
+
+enum ValueKind {
+    Text
+    Integer
+    Floating
+    Boolean
+}
+
+enum ArgumentKind {
+    Positional
+    Option
+    Flag
+}
+
+enum ArgumentError {
+    UnknownOption(String)
+    UnknownCommand(String)
+    MissingValue(String)
+    UnexpectedValue(String)
+    MissingArgument(String)
+    InvalidValue(String)
+    DuplicateArgument(String)
+    UnexpectedArgument(String)
+    HelpRequested
+    VersionRequested
+}
+
+// One field in a command's schema. The memberwise constructor is intentional:
+// it makes command declarations read like Swift's @Argument/@Option/@Flag
+// properties while still leaving the model completely inspectable at runtime.
+struct ArgumentSpec {
+    let name: String
+    let kind: ArgumentKind
+    let valueKind: ValueKind
+    let shortName: String = ""
+    let aliases: [String] = []
+    let valueName: String = "VALUE"
+    let help: String = ""
+    let choices: [String] = []
+    let required: Bool = false
+    let repeated: Bool = false
+    let defaultText: String = ""
+}
+
+struct CommandConfiguration {
+    let name: String
+    let aliases: [String] = []
+    let abstract: String = ""
+    let discussion: String = ""
+    let version: String = ""
+    let subcommands: [String] = []
+    let defaultSubcommand: String = ""
+    let allowsRemainder: Bool = false
+}
+
+struct Command {
+    let configuration: CommandConfiguration
+    let arguments: [ArgumentSpec]
+}
+
+// A construct family gives larger applications a Swift-like command protocol
+// without making the parser depend on one concrete command type. A command
+// backed by this family can provide its own configuration and execution body;
+// the ordinary `Command` value above remains useful for data-only commands and
+// tests.
+construct ParsableCommand {
+    @Required let configuration: CommandConfiguration
+    @Required let arguments: [ArgumentSpec]
+    @Required function run(arguments: borrow ParsedArguments) -> Int
+}
+
+// Keep the construct family materialized in a library-only build as well as
+// in an executable that contributes its own commands. It is a valid no-op
+// command, useful for hosts that want to assemble a router incrementally.
+ParsableCommand EmptyCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration(name: "empty", abstract: "A no-op command")
+    }
+
+    let arguments: [ArgumentSpec] {
+        return []
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Int {
+        return 0
+    }
+}
+
+// ParsedValue stores all three useful scalar views. A caller can use the
+// accessor matching the schema's ValueKind without introducing optionals into
+// every command's own configuration type.
+struct ParsedValue {
+    let name: String
+    let kind: ArgumentKind
+    let text: String
+    let integer: Int
+    let floating: Float
+    let boolean: Bool
+    let occurrences: Int
+    let provided: Bool
+}
+
+struct ParsedArguments {
+    let command: String
+    let values: [ParsedValue]
+    let remainder: [String]
+}
+
+// Constructors ----------------------------------------------------------------
+
+function argument(name: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Positional,
+        valueKind: .Text,
+        valueName: "VALUE",
+        help: help,
+        required: true
+    )
+}
+
+function optionalArgument(name: String, help: String, defaultText: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Positional,
+        valueKind: .Text,
+        valueName: "VALUE",
+        help: help,
+        defaultText: defaultText
+    )
+}
+
+function integerArgument(name: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Positional,
+        valueKind: .Integer,
+        valueName: "NUMBER",
+        help: help,
+        required: true
+    )
+}
+
+function floatArgument(name: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Positional,
+        valueKind: .Floating,
+        valueName: "NUMBER",
+        help: help,
+        required: true
+    )
+}
+
+function option(name: String, shortName: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Text,
+        shortName: shortName,
+        valueName: "VALUE",
+        help: help,
+        required: true
+    )
+}
+
+function optionWithAliases(name: String, shortName: String, aliases: [String], help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Text,
+        shortName: shortName,
+        aliases: aliases,
+        valueName: "VALUE",
+        help: help,
+        required: true
+    )
+}
+
+function choiceOption(name: String, shortName: String, choices: [String], help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Text,
+        shortName: shortName,
+        valueName: "VALUE",
+        help: help,
+        choices: choices,
+        required: true
+    )
+}
+
+function optionalChoiceOption(name: String, shortName: String, choices: [String], defaultText: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Text,
+        shortName: shortName,
+        valueName: "VALUE",
+        help: help,
+        choices: choices,
+        defaultText: defaultText
+    )
+}
+
+function optionalOption(name: String, shortName: String, defaultText: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Text,
+        shortName: shortName,
+        valueName: "VALUE",
+        help: help,
+        defaultText: defaultText
+    )
+}
+
+function optionalOptionWithAliases(name: String, shortName: String, aliases: [String], defaultText: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Text,
+        shortName: shortName,
+        aliases: aliases,
+        valueName: "VALUE",
+        help: help,
+        defaultText: defaultText
+    )
+}
+
+function integerOption(name: String, shortName: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Integer,
+        shortName: shortName,
+        valueName: "NUMBER",
+        help: help,
+        required: true
+    )
+}
+
+function optionalIntegerOption(name: String, shortName: String, defaultText: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Integer,
+        shortName: shortName,
+        valueName: "NUMBER",
+        help: help,
+        defaultText: defaultText
+    )
+}
+
+function optionalIntegerOptionWithAliases(name: String, shortName: String, aliases: [String], defaultText: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Integer,
+        shortName: shortName,
+        aliases: aliases,
+        valueName: "NUMBER",
+        help: help,
+        defaultText: defaultText
+    )
+}
+
+function floatOption(name: String, shortName: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Floating,
+        shortName: shortName,
+        valueName: "NUMBER",
+        help: help,
+        required: true
+    )
+}
+
+function optionalFloatOption(name: String, shortName: String, defaultText: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Floating,
+        shortName: shortName,
+        valueName: "NUMBER",
+        help: help,
+        defaultText: defaultText
+    )
+}
+
+function repeatedOption(name: String, shortName: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Text,
+        shortName: shortName,
+        valueName: "VALUE",
+        help: help,
+        repeated: true
+    )
+}
+
+function repeatedOptionWithAliases(name: String, shortName: String, aliases: [String], help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Text,
+        shortName: shortName,
+        aliases: aliases,
+        valueName: "VALUE",
+        help: help,
+        repeated: true
+    )
+}
+
+function repeatedIntegerOption(name: String, shortName: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Integer,
+        shortName: shortName,
+        valueName: "NUMBER",
+        help: help,
+        repeated: true
+    )
+}
+
+function repeatedFloatOption(name: String, shortName: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Option,
+        valueKind: .Floating,
+        shortName: shortName,
+        valueName: "NUMBER",
+        help: help,
+        repeated: true
+    )
+}
+
+function flag(name: String, shortName: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Flag,
+        valueKind: .Boolean,
+        shortName: shortName,
+        valueName: "",
+        help: help,
+        defaultText: "false"
+    )
+}
+
+function flagWithAliases(name: String, shortName: String, aliases: [String], help: String) -> ArgumentSpec {
+    return ArgumentSpec(
+        name: name,
+        kind: .Flag,
+        valueKind: .Boolean,
+        shortName: shortName,
+        aliases: aliases,
+        valueName: "",
+        help: help,
+        defaultText: "false"
+    )
+}
+
+function makeCommand(configuration: borrow CommandConfiguration, arguments: [ArgumentSpec]) -> Command {
+    return Command(configuration: configuration, arguments: arguments)
+}
+
+// Return the actual user arguments of the compiled process. The executable
+// path is intentionally omitted, matching the convention used by Swift's
+// ArgumentParser and by the OS-level argv APIs it models.
+function commandLineArguments() -> [String] {
+    var result: [String] = []
+    var index = 0
+    let count = processArgumentCount()
+    while index < count {
+        result.append(processArgument(index))
+        index = index + 1
+    }
+    return result
+}
+
+// Execute a construct-backed command as a complete CLI. The caller supplies
+// the token array, while this runner owns the Swift-like lifecycle: build the
+// schema, parse, show help/version, or invoke the command's run body with
+// validated arguments.
+function runCommand(command: borrow Any ParsableCommand, tokens: [String]) {
+    let parser = Parser(makeCommand(command.configuration, command.arguments))
+    match parser.parse(move tokens) {
+        Ok(raw) -> {
+            command.run(raw)
+        }
+        Error(error) -> {
+            print(describeError(error))
+            if isHelpRequested(error) {
+                print(parser.help())
+            }
+            if isVersionRequested(error) {
+                print(parser.version())
+            }
+            if !isHelpRequested(error) && !isVersionRequested(error) {
+                print(parser.help())
+            }
+            return
+        }
+    }
+    return
+}
+
+function commandValue(command: borrow Any ParsableCommand) -> Command {
+    return makeCommand(command.configuration, command.arguments)
+}
+
+function commandValueIndex(commands: borrow [Any ParsableCommand], name: borrow String) -> Int {
+    var index = 0
+    while index < commands.count {
+        let command = commands[index]
+        let configuration = command.configuration
+        if configuration.name == name || hasText(configuration.aliases, name) {
+            return index
+        }
+        index = index + 1
+    }
+    return 0 - 1
+}
+
+function firstCommandToken(tokens: borrow [String]) -> String {
+    if tokens.count == 0 {
+        return ""
+    }
+    let token = tokens[0]
+    if token == "--" || isLongToken(token) || isShortToken(token) {
+        return ""
+    }
+    return token
+}
+
+// The multi-command counterpart to runCommand. Child declarations remain
+// heterogeneous `ParsableCommand` values, while the router parses each
+// child's independent schema and dispatches the typed result to the selected
+// run body. This is the Kira equivalent of Swift's subcommand composition.
+function runCommandRouter(root: borrow Any ParsableCommand, children: borrow [Any ParsableCommand], tokens: [String]) {
+    var schemas: [Command] = []
+    for child in children {
+        schemas.append(commandValue(child))
+    }
+    let router = makeCommandRouter(commandValue(root), move schemas)
+    let requestedCommand = firstCommandToken(tokens)
+
+    match router.parse(move tokens) {
+        Ok(raw) -> {
+            let childIndex = commandValueIndex(children, raw.command)
+            if childIndex >= 0 {
+                children[childIndex].run(raw)
+            } else {
+                root.run(raw)
+            }
+        }
+        Error(error) -> {
+            print(describeError(error))
+            if isHelpRequested(error) {
+                if requestedCommand.count > 0 {
+                    print(router.helpFor(requestedCommand))
+                } else {
+                    print(router.help())
+                }
+            }
+            if isVersionRequested(error) {
+                print(router.version())
+            }
+            if !isHelpRequested(error) && !isVersionRequested(error) {
+                if requestedCommand.count > 0 {
+                    print(router.helpFor(requestedCommand))
+                } else {
+                    print(router.help())
+                }
+            }
+            return
+        }
+    }
+    return
+}
+
+// Small text and schema helpers ------------------------------------------------
+
+function isLongToken(token: borrow String) -> Bool {
+    return token.count > 2 && token.charAt(0) == 45 && token.charAt(1) == 45
+}
+
+function isShortToken(token: borrow String) -> Bool {
+    return token.count > 1 && token.charAt(0) == 45 && token.charAt(1) != 45
+}
+
+function hasText(values: borrow [String], wanted: borrow String) -> Bool {
+    for value in values {
+        if value == wanted {
+            return true
+        }
+    }
+    return false
+}
+
+function joinText(values: borrow [String], separator: borrow String) -> String {
+    var result = ""
+    var first = true
+    for value in values {
+        if !first {
+            result = result + separator
+        }
+        result = result + value
+        first = false
+    }
+    return result
+}
+
+// Kira exposes integer text conversion but intentionally leaves floating-point
+// parsing to libraries. Keep the CLI boundary deterministic by accepting the
+// small, portable decimal grammar used by ordinary command-line values:
+// `12`, `-12`, `12.5`, `-12.5`, and `.5`.
+function floatTextIsValid(text: borrow String) -> Bool {
+    if text.count == 0 {
+        return false
+    }
+
+    var body = text
+    if body.charAt(0) == 45 {
+        if body.count == 1 {
+            return false
+        }
+        body = body.substring(1, body.count)
+    }
+
+    let point = body.indexOf(".")
+    if point < 0 {
+        return body.isInt()
+    }
+    if point == 0 {
+        if body.count == 1 {
+            return false
+        }
+    } else {
+        if !body.substring(0, point).isInt() {
+            return false
+        }
+    }
+
+    let fractionStart = point + 1
+    if fractionStart >= body.count {
+        return false
+    }
+    var index = fractionStart
+    while index < body.count {
+        let character = body.charAt(index)
+        if character < 48 || character > 57 {
+            return false
+        }
+        index = index + 1
+    }
+    return true
+}
+
+function floatFromText(text: borrow String) -> Float {
+    var body = text
+    var negative = false
+    if body.charAt(0) == 45 {
+        negative = true
+        body = body.substring(1, body.count)
+    }
+
+    let point = body.indexOf(".")
+    var result = 0.0
+    if point < 0 {
+        result = Float(body.toInt())
+    } else {
+        if point > 0 {
+            result = Float(body.substring(0, point).toInt())
+        }
+        let fraction = body.substring(point + 1, body.count)
+        var fractionValue = 0.0
+        var divisor = 1.0
+        var index = 0
+        while index < fraction.count {
+            fractionValue = fractionValue * 10.0 + Float(fraction.charAt(index) - 48)
+            divisor = divisor * 10.0
+            index = index + 1
+        }
+        result = result + fractionValue / divisor
+    }
+    if negative {
+        return 0.0 - result
+    }
+    return result
+}
+
+function validValue(text: borrow String, kind: ValueKind) -> Bool {
+    match kind {
+        Text -> {
+            return true
+        }
+        Integer -> {
+            return text.isInt()
+        }
+        Floating -> {
+            return floatTextIsValid(text)
+        }
+        Boolean -> {
+            return text == "true" || text == "false"
+        }
+    }
+}
+
+function validSpecValue(spec: borrow ArgumentSpec, text: borrow String) -> Bool {
+    if !validValue(text, spec.valueKind) {
+        return false
+    }
+    if spec.choices.count > 0 && !hasText(spec.choices, text) {
+        return false
+    }
+    return true
+}
+
+function parsedValue(spec: borrow ArgumentSpec, text: borrow String, occurrences: Int, provided: Bool) -> ParsedValue {
+    var number = 0
+    var decimal = 0.0
+    var enabled = false
+    if spec.valueKind == .Integer {
+        number = text.toInt()
+    }
+    if spec.valueKind == .Floating {
+        decimal = floatFromText(text)
+    }
+    if text == "true" {
+        enabled = true
+    }
+    return ParsedValue(
+        name: spec.name,
+        kind: spec.kind,
+        text: text,
+        integer: number,
+        floating: decimal,
+        boolean: enabled,
+        occurrences: occurrences,
+        provided: provided
+    )
+}
+
+function valueOccurrences(values: borrow [ParsedValue], name: borrow String) -> Int {
+    var count = 0
+    for value in values {
+        if value.name == name {
+            count = count + 1
+        }
+    }
+    return count
+}
+
+function describeError(error: borrow ArgumentError) -> String {
+    match error {
+        UnknownOption(name) -> {
+            return "unknown option: --" + name
+        }
+        UnknownCommand(name) -> {
+            return "unknown command: " + name
+        }
+        MissingValue(name) -> {
+            return "missing value for --" + name
+        }
+        UnexpectedValue(name) -> {
+            return "flag does not accept a value: --" + name
+        }
+        MissingArgument(name) -> {
+            return "missing required argument: " + name
+        }
+        InvalidValue(name) -> {
+            return "invalid value for argument: " + name
+        }
+        DuplicateArgument(name) -> {
+            return "argument may only be provided once: " + name
+        }
+        UnexpectedArgument(name) -> {
+            return "unexpected argument: " + name
+        }
+        HelpRequested -> {
+            return "help requested"
+        }
+        VersionRequested -> {
+            return "version requested"
+        }
+    }
+}
+
+function isHelpRequested(error: borrow ArgumentError) -> Bool {
+    match error {
+        UnknownOption -> { return false }
+        UnknownCommand -> { return false }
+        MissingValue -> { return false }
+        UnexpectedValue -> { return false }
+        MissingArgument -> { return false }
+        InvalidValue -> { return false }
+        DuplicateArgument -> { return false }
+        UnexpectedArgument -> { return false }
+        HelpRequested -> { return true }
+        VersionRequested -> { return false }
+    }
+}
+
+function isVersionRequested(error: borrow ArgumentError) -> Bool {
+    match error {
+        UnknownOption -> { return false }
+        UnknownCommand -> { return false }
+        MissingValue -> { return false }
+        UnexpectedValue -> { return false }
+        MissingArgument -> { return false }
+        InvalidValue -> { return false }
+        DuplicateArgument -> { return false }
+        UnexpectedArgument -> { return false }
+        HelpRequested -> { return false }
+        VersionRequested -> { return true }
+    }
+}
+
+// Parser -----------------------------------------------------------------------
+
+class Parser {
+    let command: Command
+
+    function argumentIndex(name: borrow String, kind: ArgumentKind) -> Int {
+        var index = 0
+        while index < self.command.arguments.count {
+            let spec = self.command.arguments[index]
+            if (spec.name == name || hasText(spec.aliases, name)) && spec.kind == kind {
+                return index
+            }
+            index = index + 1
+        }
+        return 0 - 1
+    }
+
+    function shortArgumentIndex(shortName: borrow String, kind: ArgumentKind) -> Int {
+        var index = 0
+        while index < self.command.arguments.count {
+            let spec = self.command.arguments[index]
+            if spec.shortName == shortName && spec.kind == kind {
+                return index
+            }
+            index = index + 1
+        }
+        return 0 - 1
+    }
+
+    function positionalIndex(number: Int) -> Int {
+        var positional = 0
+        var index = 0
+        while index < self.command.arguments.count {
+            if self.command.arguments[index].kind == .Positional {
+                if positional == number {
+                    return index
+                }
+                positional = positional + 1
+            }
+            index = index + 1
+        }
+        return 0 - 1
+    }
+
+    function helpToken(token: borrow String) -> Bool {
+        return token == "--help" || token == "-h"
+    }
+
+    function versionToken(token: borrow String) -> Bool {
+        return token == "--version" || token == "-V"
+    }
+
+    function appendValue(values: borrow mut [ParsedValue], seen: borrow mut [String], spec: borrow ArgumentSpec, text: borrow String) -> ArgumentError {
+        if !validSpecValue(spec, text) {
+            return .InvalidValue(spec.name)
+        }
+        if hasText(seen, spec.name) && !spec.repeated {
+            return .DuplicateArgument(spec.name)
+        }
+        seen.append(spec.name)
+        let occurrence = valueOccurrences(values, spec.name) + 1
+        values.append(parsedValue(spec, text, occurrence, true))
+        return .HelpRequested
+    }
+
+    function parseLong(token: borrow String, index: borrow mut Int, tokens: borrow [String], values: borrow mut [ParsedValue], seen: borrow mut [String]) -> ArgumentError {
+        let equalsAt = token.indexOf("=")
+        var name = token.substring(2, token.count)
+        var inline = ""
+        var hasInline = false
+        if equalsAt >= 0 {
+            name = token.substring(2, equalsAt)
+            inline = token.substring(equalsAt + 1, token.count)
+            hasInline = true
+        }
+
+        var specIndex = self.argumentIndex(name, .Option)
+        if specIndex < 0 {
+            let flagIndex = self.argumentIndex(name, .Flag)
+            if flagIndex < 0 {
+                return .UnknownOption(name)
+            }
+            if hasInline {
+                return .UnexpectedValue(name)
+            }
+            let flagSpec = self.command.arguments[flagIndex]
+            return self.appendValue(values, seen, flagSpec, "true")
+        }
+
+        let spec = self.command.arguments[specIndex]
+        if !hasInline {
+            if index + 1 >= tokens.count {
+                return .MissingValue(name)
+            }
+            index = index + 1
+            inline = tokens[index]
+        }
+        return self.appendValue(values, seen, spec, inline)
+    }
+
+    function parseShort(token: borrow String, index: borrow mut Int, tokens: borrow [String], values: borrow mut [ParsedValue], seen: borrow mut [String]) -> ArgumentError {
+        let body = token.substring(1, token.count)
+        var cursor = 0
+        while cursor < body.count {
+            let shortName = body.substring(cursor, cursor + 1)
+            var optionIndex = self.shortArgumentIndex(shortName, .Option)
+            if optionIndex >= 0 {
+                let spec = self.command.arguments[optionIndex]
+                var value = ""
+                if cursor + 1 < body.count {
+                    value = body.substring(cursor + 1, body.count)
+                    if value.count > 0 && value.charAt(0) == 61 {
+                        value = value.substring(1, value.count)
+                    }
+                } else {
+                    if index + 1 >= tokens.count {
+                        return .MissingValue(spec.name)
+                    }
+                    index = index + 1
+                    value = tokens[index]
+                }
+                return self.appendValue(values, seen, spec, value)
+            }
+
+            let flagIndex = self.shortArgumentIndex(shortName, .Flag)
+            if flagIndex < 0 {
+                return .UnknownOption(shortName)
+            }
+            let flagSpec = self.command.arguments[flagIndex]
+            let result = self.appendValue(values, seen, flagSpec, "true")
+            if result != .HelpRequested {
+                return result
+            }
+            cursor = cursor + 1
+        }
+        return .HelpRequested
+    }
+
+    function parse(tokens: [String]) -> Result<ParsedArguments, ArgumentError> {
+        var values: [ParsedValue] = []
+        var seen: [String] = []
+        var remainder: [String] = []
+        var afterTerminator = false
+        var positional = 0
+        var selectedCommand = self.command.configuration.name
+        var index = 0
+
+        while index < tokens.count {
+            let token = tokens[index]
+            if index == 0 && self.command.configuration.subcommands.count > 0 && !afterTerminator {
+                if !self.helpToken(token) && !self.versionToken(token) && !isLongToken(token) && !isShortToken(token) && token != "--" {
+                    if hasText(self.command.configuration.subcommands, token) {
+                        selectedCommand = token
+                        index = index + 1
+                        continue
+                    }
+                    return .Error(.UnknownCommand(token))
+                }
+            }
+            if !afterTerminator && token == "--" {
+                afterTerminator = true
+                index = index + 1
+                continue
+            }
+            if !afterTerminator && self.helpToken(token) {
+                return .Error(.HelpRequested)
+            }
+            if !afterTerminator && self.versionToken(token) && self.command.configuration.version.count > 0 {
+                return .Error(.VersionRequested)
+            }
+
+            var parserError = ArgumentError.HelpRequested
+            var handled = false
+            if !afterTerminator && isLongToken(token) {
+                parserError = self.parseLong(token, index, tokens, values, seen)
+                handled = true
+            } else if !afterTerminator && isShortToken(token) {
+                parserError = self.parseShort(token, index, tokens, values, seen)
+                handled = true
+            }
+
+            if handled {
+                if parserError != .HelpRequested {
+                    return .Error(parserError)
+                }
+            } else {
+                let specIndex = self.positionalIndex(positional)
+                if specIndex < 0 {
+                    if self.command.configuration.allowsRemainder {
+                        remainder.append(token)
+                    } else {
+                        return .Error(.UnexpectedArgument(token))
+                    }
+                } else {
+                    let spec = self.command.arguments[specIndex]
+                    parserError = self.appendValue(values, seen, spec, token)
+                    if parserError != .HelpRequested {
+                        return .Error(parserError)
+                    }
+                    positional = positional + 1
+                }
+            }
+            index = index + 1
+        }
+
+        var specIndex = 0
+        while specIndex < self.command.arguments.count {
+            let spec = self.command.arguments[specIndex]
+            if spec.required && !hasText(seen, spec.name) {
+                return .Error(.MissingArgument(spec.name))
+            }
+            if !hasText(seen, spec.name) && spec.defaultText.count > 0 {
+                if !validSpecValue(spec, spec.defaultText) {
+                    return .Error(.InvalidValue(spec.name))
+                }
+                values.append(parsedValue(spec, spec.defaultText, 1, false))
+                seen.append(spec.name)
+            }
+            specIndex = specIndex + 1
+        }
+
+        return .Ok(ParsedArguments(
+            command: selectedCommand,
+            values: values,
+            remainder: remainder
+        ))
+    }
+
+    function help() -> String {
+        var text = "USAGE: " + self.command.configuration.name
+        if self.command.configuration.subcommands.count > 0 {
+            text = text + " <subcommand>"
+        }
+        for spec in self.command.arguments {
+            if spec.kind == .Positional {
+                if spec.required {
+                    text = text + " <" + spec.name + ">"
+                } else {
+                    text = text + " [<" + spec.name + ">]"
+                }
+            } else if spec.kind == .Flag {
+                text = text + " [--" + spec.name + "]"
+            } else if spec.required {
+                text = text + " --" + spec.name + " <" + spec.valueName + ">"
+            } else {
+                text = text + " [--" + spec.name + " <" + spec.valueName + ">]"
+            }
+        }
+
+        text = text + "\n\n" + self.command.configuration.abstract
+        if self.command.configuration.aliases.count > 0 {
+            text = text + "\nAliases: " + joinText(self.command.configuration.aliases, " | ")
+        }
+        if self.command.configuration.defaultSubcommand.count > 0 {
+            text = text + "\nDefault command: " + self.command.configuration.defaultSubcommand
+        }
+        if self.command.configuration.discussion.count > 0 {
+            text = text + "\n\n" + self.command.configuration.discussion
+        }
+        text = text + "\n\nOPTIONS:\n  -h, --help  Show help"
+        if self.command.configuration.version.count > 0 {
+            text = text + "\n  -V, --version  Show version"
+        }
+        for spec in self.command.arguments {
+            var line = "\n  --" + spec.name
+            if spec.shortName.count > 0 {
+                line = "\n  -" + spec.shortName + ", --" + spec.name
+            }
+            for alias in spec.aliases {
+                line = line + ", --" + alias
+            }
+            if spec.kind == .Positional {
+                line = "\n  <" + spec.name + ">"
+            } else if spec.kind == .Option {
+                line = line + " <" + spec.valueName + ">"
+            }
+            if spec.help.count > 0 {
+                line = line + "  " + spec.help
+            }
+            if spec.choices.count > 0 {
+                line = line + " (" + joinText(spec.choices, " | ") + ")"
+            }
+            text = text + line
+        }
+        if self.command.configuration.subcommands.count > 0 {
+            text = text + "\n\nCOMMANDS:"
+            for subcommand in self.command.configuration.subcommands {
+                text = text + "\n  " + subcommand
+            }
+        }
+        return text
+    }
+
+    function version() -> String {
+        return self.command.configuration.name + " " + self.command.configuration.version
+    }
+}
+
+// CommandRouter ----------------------------------------------------------------
+
+// A Parser owns one command schema. CommandRouter adds independent child
+// schemas, which is the important distinction between a help-only list of
+// subcommands and a real multi-command CLI. Each child is still an ordinary
+// Command, so it can be assembled with the same constructors and can have its
+// own derived argument model.
+class CommandRouter {
+    let parser: Parser
+    let commands: [Command]
+
+    function commandIndex(name: borrow String) -> Int {
+        var index = 0
+        while index < self.commands.count {
+            let command = self.commands[index]
+            if command.configuration.name == name || hasText(command.configuration.aliases, name) {
+                return index
+            }
+            index = index + 1
+        }
+        return 0 - 1
+    }
+
+    function afterFirst(tokens: borrow [String]) -> [String] {
+        var rest: [String] = []
+        var index = 1
+        while index < tokens.count {
+            rest.append(tokens[index])
+            index = index + 1
+        }
+        return rest
+    }
+
+    function parse(tokens: [String]) -> Result<ParsedArguments, ArgumentError> {
+        if tokens.count == 0 && self.parser.command.configuration.defaultSubcommand.count > 0 {
+            let defaultIndex = self.commandIndex(self.parser.command.configuration.defaultSubcommand)
+            if defaultIndex >= 0 {
+                let child = self.commands[defaultIndex]
+                let childParser = Parser(move child)
+                return childParser.parse([])
+            }
+        }
+
+        if tokens.count == 0 {
+            return self.parser.parse(move tokens)
+        }
+
+        let first = tokens[0]
+        if first == "--" || first == "-" || isLongToken(first) || isShortToken(first) {
+            return self.parser.parse(move tokens)
+        }
+        if first == "--help" || first == "-h" || first == "--version" || first == "-V" {
+            return self.parser.parse(move tokens)
+        }
+
+        let childIndex = self.commandIndex(first)
+        if childIndex < 0 {
+            if self.commands.count > 0 || self.parser.command.configuration.subcommands.count > 0 {
+                return .Error(.UnknownCommand(first))
+            }
+            return self.parser.parse(move tokens)
+        }
+
+        let child = self.commands[childIndex]
+        let childParser = Parser(move child)
+        let rest = self.afterFirst(tokens)
+        return childParser.parse(move rest)
+    }
+
+    function help() -> String {
+        var text = self.parser.help()
+        if self.commands.count > 0 {
+            text = text + "\n\nCOMMAND DETAILS:"
+            for command in self.commands {
+                let configuration = command.configuration
+                var line = "\n  " + configuration.name
+                if configuration.aliases.count > 0 {
+                    line = line + " (" + joinText(configuration.aliases, " | ") + ")"
+                }
+                if configuration.abstract.count > 0 {
+                    line = line + "  " + configuration.abstract
+                }
+                text = text + line
+            }
+        }
+        return text
+    }
+
+    function helpFor(name: borrow String) -> String {
+        let childIndex = self.commandIndex(name)
+        if childIndex < 0 {
+            return self.parser.help()
+        }
+        let child = self.commands[childIndex]
+        let childParser = Parser(move child)
+        return childParser.help()
+    }
+
+    function version() -> String {
+        return self.parser.version()
+    }
+}
+
+function makeCommandRouter(root: Command, commands: [Command]) -> CommandRouter {
+    let rootParser = Parser(move root)
+    return CommandRouter(move rootParser, commands)
+}
+
+// Familiar aliases for callers coming from Swift ArgumentParser terminology.
+// `Parser` stays short in Kira call sites; both names describe the same value.
+type ArgumentParser = Parser
+type ParsableArguments = ParsedArguments
+
+// Typed accessors -------------------------------------------------------------
+
+function valueText(parsed: borrow ParsedArguments, name: borrow String) -> String {
+    for value in parsed.values {
+        if value.name == name {
+            return value.text
+        }
+    }
+    return ""
+}
+
+function valueInt(parsed: borrow ParsedArguments, name: borrow String) -> Int {
+    for value in parsed.values {
+        if value.name == name {
+            return value.integer
+        }
+    }
+    return 0
+}
+
+function valueFloat(parsed: borrow ParsedArguments, name: borrow String) -> Float {
+    for value in parsed.values {
+        if value.name == name {
+            return value.floating
+        }
+    }
+    return 0.0
+}
+
+function valueBool(parsed: borrow ParsedArguments, name: borrow String) -> Bool {
+    for value in parsed.values {
+        if value.name == name {
+            return value.boolean
+        }
+    }
+    return false
+}
+
+function valuesText(parsed: borrow ParsedArguments, name: borrow String) -> [String] {
+    var result: [String] = []
+    for value in parsed.values {
+        if value.name == name {
+            result.append(value.text)
+        }
+    }
+    return result
+}
+
+function valuesInt(parsed: borrow ParsedArguments, name: borrow String) -> [Int] {
+    var result: [Int] = []
+    for value in parsed.values {
+        if value.name == name {
+            result.append(value.integer)
+        }
+    }
+    return result
+}
+
+function valuesFloat(parsed: borrow ParsedArguments, name: borrow String) -> [Float] {
+    var result: [Float] = []
+    for value in parsed.values {
+        if value.name == name {
+            result.append(value.floating)
+        }
+    }
+    return result
+}
+
+function wasProvided(parsed: borrow ParsedArguments, name: borrow String) -> Bool {
+    for value in parsed.values {
+        if value.name == name && value.provided {
+            return true
+        }
+    }
+    return false
+}
