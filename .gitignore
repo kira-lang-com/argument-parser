@@ -1,0 +1,4 @@
+# Kira compiler outputs
+.kira-build/
+**/.kira-build/
+kira.lock

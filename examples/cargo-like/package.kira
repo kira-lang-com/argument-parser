@@ -1,0 +1,5 @@
+Package CargoLikeExample {
+    let version = "0.1.0"
+    let kind = .App
+    let dependencies = [Dependency { name: "ArgumentParser", path: "../.." }]
+}
