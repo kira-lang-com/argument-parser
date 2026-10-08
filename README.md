@@ -88,7 +88,8 @@ deterministic.
 - long options, short options, aliases, `--name=value`, and short clusters;
 - typed integers and decimal values, boolean flags, defaults, choices, and
   repeated options;
-- `--` terminators and optional remainder collection;
+- `--` terminators and optional remainder collection, which runs from the
+  first operand no argument takes to the end, as getopt's `+` does;
 - independent subcommand schemas through `CommandRouter`;
 - generated usage, help, version output, and structured `ArgumentError` values;
 - `ParsableCommand` construct families for heterogeneous command routers;

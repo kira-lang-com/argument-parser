@@ -919,7 +919,12 @@ class Parser {
                 let specIndex = self.positionalIndex(positional)
                 if specIndex < 0 {
                     if self.command.configuration.allowsRemainder {
+                        // The remainder runs to the end, as Swift's
+                        // `.captureForPassthrough` and POSIX getopt's `+` do:
+                        // `caffeinate -i date -u` hands `-u` to date, not
+                        // to caffeinate.
                         remainder.append(token)
+                        afterTerminator = true
                     } else {
                         return .Error(.UnexpectedArgument(token))
                     }
@@ -977,6 +982,9 @@ class Parser {
             } else {
                 text = text + " [--" + spec.name + " <" + spec.valueName + ">]"
             }
+        }
+        if self.command.configuration.allowsRemainder {
+            text = text + " [<arguments> ...]"
         }
 
         text = text + "\n\n" + self.command.configuration.abstract
