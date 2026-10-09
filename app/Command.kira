@@ -1,0 +1,204 @@
+import Foundation
+
+// ArgumentParser is a value-oriented command-line toolkit for Kira.
+//
+// The surface follows Swift ArgumentParser's vocabulary: commands have a
+// configuration, fields are described as arguments, options and flags,
+// parsing returns a typed Result, and help is generated from the same model
+// that performs validation. `commandLineArguments()` bridges the real process
+// into the same ordinary [String] token stream, while a host or test can pass
+// its own tokens to `parse` deterministically.
+
+// What an argument's value reads as.
+enum ValueKind {
+    Text
+    // A number with no fractional part: a count, a size, a number of seconds.
+    Whole
+    Number
+    // Whether a flag was given.
+    Boolean
+}
+
+// Where an argument sits on the command line.
+enum ArgumentKind {
+    Positional
+    Option
+    Flag
+}
+
+// One field in a command's schema.
+//
+// `argument`, `option` and `flag` start one, and the modifiers below each
+// answer a copy with one more property set, so a declaration reads like
+// Swift's @Argument, @Option and @Flag:
+//
+//     option(name: "timeout", help: "How many seconds to hold the lock")
+//         .short("t").whole().defaulting("600")
+struct ArgumentSpec {
+    var name: String
+    var kind: ArgumentKind
+    var value: ValueKind = .Text
+    var shortName: String? = .None
+    var aliases: [String] = []
+    var valueName: String = "VALUE"
+    var help: String = ""
+    var choices: [String] = []
+    var isRequired: Bool = false
+    var isRepeated: Bool = false
+    // The text parsed as though it had been given, when it was not.
+    var defaultText: String? = .None
+
+    // The one-letter spelling, `-t` for `short("t")`.
+    function short(borrow self, letter: String) -> ArgumentSpec {
+        var spec = self
+        spec.shortName = .Some(letter)
+        return spec
+    }
+
+    // Other long spellings, each as good as the name.
+    function aliased(borrow self, names: [String]) -> ArgumentSpec {
+        var spec = self
+        spec.aliases = names
+        return spec
+    }
+
+    // A value that must be a whole number.
+    function whole(borrow self) -> ArgumentSpec {
+        var spec = self
+        spec.value = .Whole
+        spec.valueName = "NUMBER"
+        return spec
+    }
+
+    // A value that must be a number.
+    function number(borrow self) -> ArgumentSpec {
+        var spec = self
+        spec.value = .Number
+        spec.valueName = "NUMBER"
+        return spec
+    }
+
+    // A value that must be one of `values`.
+    function oneOf(borrow self, values: [String]) -> ArgumentSpec {
+        var spec = self
+        spec.choices = values
+        return spec
+    }
+
+    // What the value is called in help, `<SECONDS>` for `placeholder("SECONDS")`.
+    function placeholder(borrow self, text: String) -> ArgumentSpec {
+        var spec = self
+        spec.valueName = text
+        return spec
+    }
+
+    // The value taken when the command line gives none.
+    function defaulting(borrow self, text: String) -> ArgumentSpec {
+        var spec = self
+        spec.defaultText = .Some(text)
+        spec.isRequired = false
+        return spec
+    }
+
+    // A value the command line must give.
+    function required(borrow self) -> ArgumentSpec {
+        var spec = self
+        spec.isRequired = true
+        return spec
+    }
+
+    // A positional argument the command line may leave out.
+    function optional(borrow self) -> ArgumentSpec {
+        var spec = self
+        spec.isRequired = false
+        return spec
+    }
+
+    // An option that may be given more than once, each value kept.
+    function repeating(borrow self) -> ArgumentSpec {
+        var spec = self
+        spec.isRepeated = true
+        return spec
+    }
+
+    // Whether `spelling` names this argument as a long option or flag.
+    function isNamed(borrow self, spelling: borrow String) -> Bool {
+        return self.name == spelling || self.aliases.contains(spelling)
+    }
+
+    // Whether `letter` is this argument's one-letter spelling.
+    function isShort(borrow self, letter: borrow String) -> Bool {
+        match self.shortName {
+            Some(short) -> return short == letter
+            None -> return false
+        }
+    }
+}
+
+// A positional argument the command line must give.
+function argument(name: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec { name: name, kind: .Positional, help: help, isRequired: true }
+}
+
+// An option taking a value, `--name VALUE` or `--name=VALUE`.
+function option(name: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec { name: name, kind: .Option, help: help }
+}
+
+// A flag, true when given.
+function flag(name: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec { name: name, kind: .Flag, value: .Boolean, valueName: "", help: help }
+}
+
+struct CommandConfiguration {
+    let name: String
+    let aliases: [String] = []
+    let abstract: String = ""
+    let discussion: String = ""
+    let version: String? = .None
+    let subcommands: [String] = []
+    let defaultSubcommand: String? = .None
+    // Whether the first operand no argument takes, and everything after it,
+    // is kept as the remainder, as `caffeinate -i make` keeps `make`.
+    let allowsRemainder: Bool = false
+
+    function isNamed(borrow self, spelling: borrow String) -> Bool {
+        return self.name == spelling || self.aliases.contains(spelling)
+    }
+}
+
+struct Command {
+    let configuration: CommandConfiguration
+    let arguments: [ArgumentSpec]
+}
+
+// A construct family gives larger applications a Swift-like command protocol
+// without making the parser depend on one concrete command type. A command
+// backed by this family provides its own configuration and execution body; a
+// plain `Command` value remains useful for data-only commands and tests.
+construct ParsableCommand {
+    @Required let configuration: CommandConfiguration
+    @Required let arguments: [ArgumentSpec]
+    @Required function run(arguments: borrow ParsedArguments) -> Int
+}
+
+// Keeps the construct family materialized in a library-only build as well as
+// in an executable that contributes its own commands. It is a valid no-op
+// command, for hosts that assemble a router incrementally.
+ParsableCommand EmptyCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration { name: "empty", abstract: "A no-op command" }
+    }
+
+    let arguments: [ArgumentSpec] {
+        return []
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Int {
+        return 0
+    }
+}
+
+function commandOf(command: borrow Any ParsableCommand) -> Command {
+    return Command { configuration: command.configuration, arguments: command.arguments }
+}

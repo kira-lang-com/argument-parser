@@ -1,0 +1,79 @@
+import Foundation
+
+// The help a command shows, generated from the same schema that parses it.
+
+function helpText(command: borrow Command) -> String {
+    let configuration = command.configuration
+    var text = "USAGE: \(configuration.name)"
+    if configuration.subcommands.count > 0 { text += " <subcommand>" }
+    for spec in command.arguments { text += usageOf(spec) }
+    if configuration.allowsRemainder { text += " [<arguments> ...]" }
+
+    text += "\n\n" + configuration.abstract
+    if configuration.aliases.count > 0 { text += "\nAliases: " + joined(configuration.aliases, " | ") }
+    match configuration.defaultSubcommand {
+        Some(name) -> text += "\nDefault command: \(name)"
+        // Without one, a bare invocation runs the root command itself.
+        None -> {}
+    }
+    if !configuration.discussion.isEmpty() { text += "\n\n" + configuration.discussion }
+
+    text += "\n\nOPTIONS:\n  -h, --help  Show help"
+    if configuration.version.isSome() { text += "\n  -V, --version  Show version" }
+    for spec in command.arguments { text += "\n  " + describedOption(spec) }
+    if configuration.subcommands.count > 0 {
+        text += "\n\nCOMMANDS:"
+        for subcommand in configuration.subcommands { text += "\n  " + subcommand }
+    }
+    return text
+}
+
+// How an argument shows in the usage line: `<path>`, `[--verbose]`,
+// `--profile <VALUE>`.
+function usageOf(spec: borrow ArgumentSpec) -> String {
+    match spec.kind {
+        Positional -> return spec.isRequired ? " <\(spec.name)>" : " [<\(spec.name)>]"
+        Flag -> return " [--\(spec.name)]"
+        Option -> {
+            let usage = "--\(spec.name) <\(spec.valueName)>"
+            return spec.isRequired ? " " + usage : " [" + usage + "]"
+        }
+    }
+}
+
+// An argument's line in the options list.
+function describedOption(spec: borrow ArgumentSpec) -> String {
+    var line = spellingsOf(spec)
+    if !spec.help.isEmpty() { line += "  " + spec.help }
+    if spec.choices.count > 0 { line += " (" + joined(spec.choices, " | ") + ")" }
+    return line
+}
+
+function spellingsOf(spec: borrow ArgumentSpec) -> String {
+    match spec.kind {
+        Positional -> return "<\(spec.name)>"
+        Flag -> return longSpellings(spec)
+        Option -> return longSpellings(spec) + " <\(spec.valueName)>"
+    }
+}
+
+// `-t, --timeout, --wait`.
+function longSpellings(spec: borrow ArgumentSpec) -> String {
+    var spellings = "--\(spec.name)"
+    match spec.shortName {
+        Some(letter) -> spellings = "-\(letter), " + spellings
+        // Only the long spellings exist.
+        None -> {}
+    }
+    for alias in spec.aliases { spellings += ", --\(alias)" }
+    return spellings
+}
+
+function joined(values: borrow [String], separator: borrow String) -> String {
+    var text = ""
+    for (index, value) in values.enumerated() {
+        if index > 0 { text += separator }
+        text += value
+    }
+    return text
+}

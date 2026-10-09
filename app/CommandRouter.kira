@@ -1,0 +1,143 @@
+import Foundation
+
+namespace ExitStatus {
+    // What a command exits with when its command line was wrong, as Swift
+    // ArgumentParser's `validationFailure` does: sysexits' `EX_USAGE`.
+    let usage: Int = 64
+}
+
+// A Parser owns one command schema. CommandRouter adds independent child
+// schemas, which is the difference between a help-only list of subcommands
+// and a real multi-command CLI. Each child is still an ordinary Command, so it
+// is assembled with the same constructors and has its own argument model.
+struct CommandRouter {
+    let root: Command
+    let commands: [Command] = []
+
+    function command(borrow self, spelling: borrow String) -> Command? {
+        for command in self.commands {
+            if command.configuration.isNamed(spelling) { return .Some(command) }
+        }
+        return .None
+    }
+
+    function parse(borrow self, tokens: borrow [String]) -> Result<ParsedArguments, ArgumentError> {
+        let rootParser = Parser { command: self.root }
+        if tokens.count == 0 {
+            match self.root.configuration.defaultSubcommand {
+                Some(name) -> {
+                    match self.command(name) {
+                        Some(child) -> return Parser { command: child }.parse([])
+                        None -> return rootParser.parse(tokens)
+                    }
+                }
+                None -> return rootParser.parse(tokens)
+            }
+        }
+        let first = tokens[0]
+        if !isOperand(first) || first == "-" { return rootParser.parse(tokens) }
+        match self.command(first) {
+            Some(child) -> {
+                var rest: [String] = []
+                for index in 1..tokens.count { rest.append(tokens[index]) }
+                return Parser { command: child }.parse(rest)
+            }
+            None -> {
+                if self.commands.count > 0 || self.root.configuration.subcommands.count > 0 {
+                    return .Error(.UnknownCommand(first))
+                }
+                return rootParser.parse(tokens)
+            }
+        }
+    }
+
+    function help(borrow self) -> String {
+        var text = helpText(self.root)
+        if self.commands.count == 0 { return text }
+        text += "\n\nCOMMAND DETAILS:"
+        for command in self.commands {
+            let configuration = command.configuration
+            text += "\n  " + configuration.name
+            if configuration.aliases.count > 0 { text += " (" + joined(configuration.aliases, " | ") + ")" }
+            if !configuration.abstract.isEmpty() { text += "  " + configuration.abstract }
+        }
+        return text
+    }
+
+    // The help of the command `tokens` name: a child's when the first token
+    // is one, the whole router's otherwise.
+    function helpFor(borrow self, tokens: borrow [String]) -> String {
+        if tokens.count == 0 { return self.help() }
+        match self.command(tokens[0]) {
+            Some(child) -> return helpText(child)
+            None -> return self.help()
+        }
+    }
+
+    function version(borrow self) -> String {
+        return Parser { command: self.root }.version()
+    }
+
+    // Shows what a failed parse of `tokens` calls for: the help or version
+    // asked for, on standard output, or what was wrong and the usage, on
+    // standard error.
+    function explain(borrow self, error: borrow ArgumentError, tokens: borrow [String]) {
+        match error {
+            HelpRequested -> print(self.helpFor(tokens))
+            VersionRequested -> print(self.version())
+            UnknownOption, UnknownCommand, MissingValue, UnexpectedValue, MissingArgument, InvalidValue, DuplicateArgument, UnexpectedArgument -> {
+                printError("\(self.root.configuration.name): \(error.description())")
+                printError(self.helpFor(tokens))
+            }
+        }
+    }
+}
+
+// The arguments the process was started with, its own path excluded, as
+// Swift's ArgumentParser and the OS-level argv APIs it models read them.
+function commandLineArguments() -> [String] {
+    var arguments: [String] = []
+    for index in 0..processArgumentCount() {
+        match processArgument(index) {
+            Some(argument) -> arguments.append(argument)
+            // The count was read first; nothing is past where it stopped.
+            None -> break
+        }
+    }
+    return arguments
+}
+
+// Runs a construct-backed command as a complete CLI: builds the schema,
+// parses `tokens`, shows help or the version, or runs the command's body
+// with the validated arguments. Answers the status the program exits with.
+function runCommand(command: borrow Any ParsableCommand, tokens: borrow [String]) -> Int {
+    let router = CommandRouter { root: commandOf(command) }
+    match router.parse(tokens) {
+        Ok(parsed) -> return command.run(parsed)
+        Error(error) -> return explained(router, error, tokens)
+    }
+}
+
+// The multi-command counterpart to runCommand. Child declarations remain
+// heterogeneous `ParsableCommand` values, while the router parses each
+// child's own schema and dispatches the typed result to the selected run
+// body: Kira's equivalent of Swift's subcommand composition.
+function runCommandRouter(root: borrow Any ParsableCommand, children: borrow [Any ParsableCommand], tokens: borrow [String]) -> Int {
+    var commands: [Command] = []
+    for child in children { commands.append(commandOf(child)) }
+    let router = CommandRouter { root: commandOf(root), commands: commands }
+    match router.parse(tokens) {
+        Ok(parsed) -> {
+            for child in children {
+                if child.configuration.isNamed(parsed.command) { return child.run(parsed) }
+            }
+            return root.run(parsed)
+        }
+        Error(error) -> return explained(router, error, tokens)
+    }
+}
+
+function explained(router: borrow CommandRouter, error: borrow ArgumentError, tokens: borrow [String]) -> Int {
+    router.explain(error, tokens)
+    return error.isCleanExit() ? 0 : ExitStatus.usage
+}

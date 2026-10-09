@@ -1,5 +1,5 @@
-Package ArgumentParser {
-    let version = "0.1.0"
-    let kind = .Library
-    let moduleRoot = "ArgumentParser"
+construct ArgumentParser extends Package {
+    let version: String = "0.1.0"
+    let kind: PackageKind = .Library
+    let moduleRoot: String = "ArgumentParser"
 }

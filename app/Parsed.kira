@@ -1,0 +1,142 @@
+import Foundation
+
+// One value the command line gave, or a default stood in for.
+enum ArgumentValue {
+    Text(String)
+    Number(Number)
+    Flag(Bool)
+
+    function text(borrow self) -> String? {
+        match self {
+            Text(text) -> return .Some(text)
+            Number(number) -> return .None
+            Flag(given) -> return .None
+        }
+    }
+
+    function number(borrow self) -> Number? {
+        match self {
+            Number(number) -> return .Some(number)
+            Text(text) -> return .None
+            Flag(given) -> return .None
+        }
+    }
+
+    function flag(borrow self) -> Bool? {
+        match self {
+            Flag(given) -> return .Some(given)
+            Text(text) -> return .None
+            Number(number) -> return .None
+        }
+    }
+}
+
+struct ParsedValue {
+    let name: String
+    let value: ArgumentValue
+    // Whether the command line gave it, rather than the schema's default.
+    let provided: Bool
+}
+
+// What a command line said, checked against its command's schema.
+//
+// Every accessor answers by the argument's name. One that names an argument
+// with no value answers `.None`, so a command tells "not given" from any value
+// it could have been given.
+struct ParsedArguments {
+    let command: String
+    let values: [ParsedValue]
+    // What follows the first operand of a command that allows a remainder.
+    let remainder: [String]
+
+    function value(borrow self, name: borrow String) -> ArgumentValue? {
+        for parsed in self.values {
+            if parsed.name == name { return .Some(parsed.value) }
+        }
+        return .None
+    }
+
+    function text(borrow self, name: borrow String) -> String? {
+        match self.value(name) {
+            Some(value) -> return value.text()
+            None -> return .None
+        }
+    }
+
+    function number(borrow self, name: borrow String) -> Number? {
+        match self.value(name) {
+            Some(value) -> return value.number()
+            None -> return .None
+        }
+    }
+
+    // Whether a flag was given. A flag not given is false, which is what a
+    // flag means, so this answers no optional.
+    function flag(borrow self, name: borrow String) -> Bool {
+        match self.value(name) {
+            Some(value) -> {
+                match value.flag() {
+                    Some(given) -> return given
+                    None -> return false
+                }
+            }
+            None -> return false
+        }
+    }
+
+    // Every value a repeating option was given, in command-line order.
+    function texts(borrow self, name: borrow String) -> [String] {
+        var texts: [String] = []
+        for parsed in self.values {
+            if parsed.name != name { continue }
+            match parsed.value.text() {
+                Some(text) -> texts.append(text)
+                None -> continue
+            }
+        }
+        return texts
+    }
+
+    function numbers(borrow self, name: borrow String) -> [Number] {
+        var numbers: [Number] = []
+        for parsed in self.values {
+            if parsed.name != name { continue }
+            match parsed.value.number() {
+                Some(number) -> numbers.append(number)
+                None -> continue
+            }
+        }
+        return numbers
+    }
+
+    function wasProvided(borrow self, name: borrow String) -> Bool {
+        for parsed in self.values {
+            if parsed.name == name && parsed.provided { return true }
+        }
+        return false
+    }
+
+    // The text of an argument the schema always fills, being required or
+    // defaulted. `@Derive(Parsable)` reads non-optional fields through this,
+    // so a field the schema leaves empty is a mistake in the program, and
+    // traps saying which.
+    function requiredText(borrow self, name: borrow String) -> String {
+        match self.text(name) {
+            Some(text) -> return text
+            None -> {
+                printError("ArgumentParser: the schema gives `\(name)` no text; make it required or give it a default")
+                runtimeTrap()
+            }
+        }
+    }
+
+    function requiredNumber(borrow self, name: borrow String) -> Number {
+        match self.number(name) {
+            Some(number) -> return number
+            None -> {
+                printError("ArgumentParser: the schema gives `\(name)` no number; make it required or give it a default")
+                runtimeTrap()
+            }
+        }
+    }
+}

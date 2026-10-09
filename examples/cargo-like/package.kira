@@ -1,5 +1,5 @@
-Package CargoLikeExample {
-    let version = "0.1.0"
-    let kind = .App
-    let dependencies = [Dependency { name: "ArgumentParser", path: "../.." }]
+construct CargoLikeExample extends Package {
+    let version: String = "0.1.0"
+    let kind: PackageKind = .App
+    let dependencies: [Dependency] = [Dependency { name: "ArgumentParser", path: "../.." }]
 }

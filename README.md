@@ -2,11 +2,15 @@
 
 `ArgumentParser` is a real command-line parsing library for Kira, modeled on
 Swift ArgumentParser's command-first design. Commands declare a schema with
-constructors, `@Derive(Parsable)` projects validated tokens into typed Kira
-values, and `runCommand` or `runCommandRouter` owns help, version, errors, and
-dispatch.
+`argument`, `option` and `flag` and their modifiers, `@Derive(Parsable)`
+projects validated tokens into typed Kira values, and `runCommand` or
+`runCommandRouter` owns help, version, errors, and dispatch.
 
-The package uses Kira manifests: `package.kira`, not TOML.
+A program depends on it by path:
+
+```kira
+let dependencies: [Dependency] = [Dependency { name: "ArgumentParser", path: "../argument-parser" }]
+```
 
 ## Swift-shaped Kira
 
@@ -38,63 +42,62 @@ import ArgumentParser
 @Derive(Parsable)
 struct RepeatArguments {
     let includeCounter: Bool
-    let count: Int
+    let count: Number
     let phrase: String
 }
 
 ParsableCommand RepeatCommand {
     let configuration: CommandConfiguration {
-        return CommandConfiguration(name: "repeat", abstract: "Repeat a phrase")
+        return CommandConfiguration { name: "repeat", abstract: "Repeat a phrase" }
     }
 
     let arguments: [ArgumentSpec] {
         return [
-            flag(name: "includeCounter", shortName: "i", help: "Include a counter"),
-            optionalIntegerOption(name: "count", shortName: "c", defaultText: "2", help: "Repetitions"),
-            argument(name: "phrase", help: "The phrase to repeat")
+            flag(name: "includeCounter", help: "Include a counter").short("i"),
+            option(name: "count", help: "Repetitions").short("c").whole().defaulting("2"),
+            argument(name: "phrase", help: "The phrase to repeat"),
         ]
     }
 
     function run(arguments: borrow ParsedArguments) -> Int {
         let parsed = parse_RepeatArguments(arguments)
-        var index = 1
-        while index <= parsed.count {
-            if parsed.includeCounter {
-                print(String(index) + ": " + parsed.phrase)
-            } else {
-                print(parsed.phrase)
-            }
-            index = index + 1
+        for index in 1..parsed.count + 1 {
+            print(parsed.includeCounter ? "\(index): \(parsed.phrase)" : parsed.phrase)
         }
         return 0
     }
 }
 
 @Main
-function main() {
-    runCommand(RepeatCommand(), commandLineArguments())
-    return
+function main() -> Int {
+    return runCommand(RepeatCommand(), commandLineArguments())
 }
 ```
 
 `commandLineArguments()` reads the compiled program's actual user arguments;
 the executable path is omitted. Tests and embedding hosts can still pass a
 literal `[String]` directly to `Parser.parse`, which keeps parser behavior
-deterministic.
+deterministic. A program that parses on its own reads values by name from
+`ParsedArguments`: `text(name)` and `number(name)` answer an optional,
+`flag(name)` a `Bool`, and `texts(name)` and `numbers(name)` every value of a
+repeating option. `CommandRouter.explain` prints what a failed parse calls
+for, and `ArgumentError.isCleanExit` says whether it was `--help` or
+`--version`.
 
 ## What the library provides
 
 - required and optional positional arguments;
 - long options, short options, aliases, `--name=value`, and short clusters;
-- typed integers and decimal values, boolean flags, defaults, choices, and
+- whole and decimal `Number` values, boolean flags, defaults, choices, and
   repeated options;
 - `--` terminators and optional remainder collection, which runs from the
   first operand no argument takes to the end, as getopt's `+` does;
 - independent subcommand schemas through `CommandRouter`;
 - generated usage, help, version output, and structured `ArgumentError` values;
 - `ParsableCommand` construct families for heterogeneous command routers;
-- `@Derive(Parsable)` support for `String`, `Int`, `Float`, `Bool`, and repeated
-  `[String]`, `[Int]`, or `[Float]` fields.
+- `@Derive(Parsable)` support for `String`, `Number`, `Int`, `Bool`, the
+  optional `String?` and `Number?`, and repeated `[String]` or `[Number]`
+  fields.
 
 ## Serious examples
 

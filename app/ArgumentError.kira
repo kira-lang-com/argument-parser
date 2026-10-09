@@ -1,0 +1,42 @@
+import Foundation
+
+// Why a command line was not parsed. `HelpRequested` and `VersionRequested`
+// are not mistakes, but they end parsing the same way: the command shows what
+// was asked for instead of running.
+enum ArgumentError {
+    UnknownOption(String)
+    UnknownCommand(String)
+    MissingValue(String)
+    UnexpectedValue(String)
+    MissingArgument(String)
+    InvalidValue(String)
+    DuplicateArgument(String)
+    UnexpectedArgument(String)
+    HelpRequested
+    VersionRequested
+
+    function description(borrow self) -> String {
+        match self {
+            UnknownOption(name) -> return "unknown option: \(name)"
+            UnknownCommand(name) -> return "unknown command: \(name)"
+            MissingValue(name) -> return "missing value for --\(name)"
+            UnexpectedValue(name) -> return "flag does not accept a value: --\(name)"
+            MissingArgument(name) -> return "missing required argument: \(name)"
+            InvalidValue(name) -> return "invalid value for argument: \(name)"
+            DuplicateArgument(name) -> return "argument may only be provided once: \(name)"
+            UnexpectedArgument(name) -> return "unexpected argument: \(name)"
+            HelpRequested -> return "help requested"
+            VersionRequested -> return "version requested"
+        }
+    }
+
+    // Whether the command line asked for help or the version, which a
+    // program answers and then exits successfully.
+    function isCleanExit(borrow self) -> Bool {
+        match self {
+            HelpRequested, VersionRequested -> return true
+            UnknownOption, UnknownCommand, MissingValue, UnexpectedValue -> return false
+            MissingArgument, InvalidValue, DuplicateArgument, UnexpectedArgument -> return false
+        }
+    }
+}
