@@ -3,14 +3,14 @@ import Foundation
 namespace ArgumentLimit {
     // The longest number text taken. A `Number`'s mantissa holds any nineteen
     // digits, and a longer text would overflow it while being read.
-    let numberText: Int = 19
+    let numberText: Number = 19
 }
 
 // The tokens of a command line, taken one at a time. An option takes the
 // token after it as its value, so the parser and the option share one cursor.
 struct TokenStream {
     let tokens: [String]
-    var taken: Int = 0
+    var taken: Number = 0
 
     function next(borrow mut self) -> String? {
         if self.taken >= self.tokens.count { return .None }
@@ -27,12 +27,16 @@ struct ParseState {
     var seen: [String] = []
     var remainder: [String] = []
     // How many positional arguments have been filled.
-    var positionals: Int = 0
+    var positionals: Number = 0
     // Whether `--`, or the start of the remainder, has been passed: every
     // token after it is an operand, whatever it starts with.
     var operandsOnly: Bool = false
 
-    function add(borrow mut self, spec: borrow ArgumentSpec, text: borrow String) -> Result<Void, ArgumentError> {
+    function add(
+        borrow mut self,
+        spec: borrow ArgumentSpec,
+        text: borrow String
+    ) -> Result<Void, ArgumentError> {
         match valueOf(spec, text) {
             Some(value) -> {
                 if self.seen.contains(spec.name) && !spec.isRepeated {
@@ -56,7 +60,10 @@ struct LongOption {
 function longOption(token: borrow String) -> LongOption {
     let body = token.substring(2, token.count)
     match body.indexOf("=") {
-        Some(equals) -> return LongOption { name: body.substring(0, equals), inline: .Some(body.substring(equals + 1, body.count)) }
+        Some(equals) -> return LongOption {
+            name: body.substring(0, equals),
+            inline: .Some(body.substring(equals + 1, body.count))
+        }
         None -> return LongOption { name: body, inline: .None }
     }
 }
@@ -114,14 +121,22 @@ function numberIn(text: borrow String) -> Number? {
 struct Parser {
     let command: Command
 
-    function argumentNamed(borrow self, spelling: borrow String, kind: ArgumentKind) -> ArgumentSpec? {
+    function argumentNamed(
+        borrow self,
+        spelling: borrow String,
+        kind: ArgumentKind
+    ) -> ArgumentSpec? {
         for spec in self.command.arguments {
             if spec.kind == kind && spec.isNamed(spelling) { return .Some(spec) }
         }
         return .None
     }
 
-    function argumentLettered(borrow self, letter: borrow String, kind: ArgumentKind) -> ArgumentSpec? {
+    function argumentLettered(
+        borrow self,
+        letter: borrow String,
+        kind: ArgumentKind
+    ) -> ArgumentSpec? {
         for spec in self.command.arguments {
             if spec.kind == kind && spec.isShort(letter) { return .Some(spec) }
         }
@@ -129,7 +144,7 @@ struct Parser {
     }
 
     // The positional argument at `position`, counting from zero.
-    function positional(borrow self, position: Int) -> ArgumentSpec? {
+    function positional(borrow self, position: Number) -> ArgumentSpec? {
         var found = 0
         for spec in self.command.arguments {
             if spec.kind != .Positional { continue }
@@ -154,12 +169,23 @@ struct Parser {
             }
         }
         match self.fillDefaults(state) {
-            Ok -> return .Ok(ParsedArguments { command: state.command, values: state.values, remainder: state.remainder })
+            Ok -> return .Ok(
+                ParsedArguments {
+                    command: state.command,
+                    values: state.values,
+                    remainder: state.remainder
+                }
+            )
             Error(error) -> return .Error(error)
         }
     }
 
-    function take(borrow self, token: borrow String, stream: borrow mut TokenStream, state: borrow mut ParseState) -> Result<Void, ArgumentError> {
+    function take(
+        borrow self,
+        token: borrow String,
+        stream: borrow mut TokenStream,
+        state: borrow mut ParseState
+    ) -> Result<Void, ArgumentError> {
         if state.operandsOnly { return self.takeOperand(token, state) }
         // A command listing subcommands for help names one first.
         let configuration = self.command.configuration
@@ -182,13 +208,23 @@ struct Parser {
         }
     }
 
-    function takeOption(borrow self, token: borrow String, stream: borrow mut TokenStream, state: borrow mut ParseState) -> Result<Void, ArgumentError> {
+    function takeOption(
+        borrow self,
+        token: borrow String,
+        stream: borrow mut TokenStream,
+        state: borrow mut ParseState
+    ) -> Result<Void, ArgumentError> {
         if isLongToken(token) { return self.takeLong(token, stream, state) }
         if isShortToken(token) { return self.takeShort(token, stream, state) }
         return self.takeOperand(token, state)
     }
 
-    function takeLong(borrow self, token: borrow String, stream: borrow mut TokenStream, state: borrow mut ParseState) -> Result<Void, ArgumentError> {
+    function takeLong(
+        borrow self,
+        token: borrow String,
+        stream: borrow mut TokenStream,
+        state: borrow mut ParseState
+    ) -> Result<Void, ArgumentError> {
         let long = longOption(token)
         match self.argumentNamed(long.name, .Option) {
             Some(spec) -> {
@@ -211,7 +247,12 @@ struct Parser {
 
     // `-abc` is the flags `-a`, `-b` and `-c`, until one of them is an
     // option: the rest of the token, or the next token, is its value.
-    function takeShort(borrow self, token: borrow String, stream: borrow mut TokenStream, state: borrow mut ParseState) -> Result<Void, ArgumentError> {
+    function takeShort(
+        borrow self,
+        token: borrow String,
+        stream: borrow mut TokenStream,
+        state: borrow mut ParseState
+    ) -> Result<Void, ArgumentError> {
         let letters = token.substring(1, token.count)
         for at in 0..letters.count {
             let letter = letters.substring(at, at + 1)
@@ -238,14 +279,20 @@ struct Parser {
         return .Ok
     }
 
-    function takeOperand(borrow self, token: borrow String, state: borrow mut ParseState) -> Result<Void, ArgumentError> {
+    function takeOperand(
+        borrow self,
+        token: borrow String,
+        state: borrow mut ParseState
+    ) -> Result<Void, ArgumentError> {
         match self.positional(state.positionals) {
             Some(spec) -> {
                 state.positionals += 1
                 return state.add(spec, token)
             }
             None -> {
-                if !self.command.configuration.allowsRemainder { return .Error(.UnexpectedArgument(token)) }
+                if !self.command.configuration.allowsRemainder {
+                    return .Error(.UnexpectedArgument(token))
+                }
                 // The remainder runs to the end, as Swift's
                 // `.captureForPassthrough` and POSIX getopt's `+` do:
                 // `caffeinate -i date -u` hands `-u` to date, not to
@@ -259,14 +306,19 @@ struct Parser {
 
     // Every argument the command line left out is required, and missing, or
     // takes its default.
-    function fillDefaults(borrow self, state: borrow mut ParseState) -> Result<Void, ArgumentError> {
+    function fillDefaults(
+        borrow self,
+        state: borrow mut ParseState
+    ) -> Result<Void, ArgumentError> {
         for spec in self.command.arguments {
             if state.seen.contains(spec.name) { continue }
             if spec.isRequired { return .Error(.MissingArgument(spec.name)) }
             match spec.defaultText {
                 Some(text) -> {
                     match valueOf(spec, text) {
-                        Some(value) -> state.values.append(ParsedValue { name: spec.name, value: value, provided: false })
+                        Some(value) -> state.values.append(
+                            ParsedValue { name: spec.name, value: value, provided: false }
+                        )
                         None -> return .Error(.InvalidValue(spec.name))
                     }
                 }
@@ -285,7 +337,11 @@ struct Parser {
 }
 
 // An option's value from the token after it.
-function takeValue(spec: borrow ArgumentSpec, stream: borrow mut TokenStream, state: borrow mut ParseState) -> Result<Void, ArgumentError> {
+function takeValue(
+    spec: borrow ArgumentSpec,
+    stream: borrow mut TokenStream,
+    state: borrow mut ParseState
+) -> Result<Void, ArgumentError> {
     match stream.next() {
         Some(text) -> return state.add(spec, text)
         None -> return .Error(.MissingValue(spec.name))

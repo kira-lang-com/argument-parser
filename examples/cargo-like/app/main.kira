@@ -47,7 +47,7 @@ namespace Walk {
 }
 
 namespace Progress {
-    let barWidth: Int = 24
+    let barWidth: Number = 24
 }
 
 enum OutputFormat {
@@ -95,12 +95,14 @@ function summarized(path: borrow String) -> Result<ProjectSummary, FileFailure> 
             Ok(bytes) -> bytes
             Error(failure) -> return .Error(failure)
         }
-        return .Ok(ProjectSummary {
-            files: 1,
-            kiraFiles: path.endsWith(".kira") ? 1 : 0,
-            packageFiles: path.endsWith("package.kira") ? 1 : 0,
-            bytes: size,
-        })
+        return .Ok(
+            ProjectSummary {
+                files: 1,
+                kiraFiles: path.endsWith(".kira") ? 1 : 0,
+                packageFiles: path.endsWith("package.kira") ? 1 : 0,
+                bytes: size,
+            }
+        )
     }
     if !isDirectory(path) { return .Ok(ProjectSummary {}) }
     let listing = match listDirectory(path) {
@@ -131,38 +133,30 @@ function featureText(features: borrow [String]) -> String {
     return text
 }
 
-function unitText(units: borrow [String], frame: Int) -> String {
+function unitText(units: borrow [String], frame: Number) -> String {
     if units.count == 0 { return "workspace" }
     return units[frame % units.count]
 }
 
 function progressBar(percent: Number) -> String {
     let bounded = percent < 0 ? 0 : (percent > 100 ? 100 : percent)
-    let filled = Int(floor(bounded * Progress.barWidth / 100))
+    let filled = floor(bounded * Progress.barWidth / 100)
     var bar = "["
     for index in 0..Progress.barWidth { bar += index < filled ? "=" : " " }
     return "\(bar)] \(bounded)%"
 }
 
 // The five status lines of `frame`.
-function buildLines(build: borrow BuildArguments, summary: borrow ProjectSummary, frame: Int) -> [String] {
-    if frame == Int(build.frames) - 1 {
-        return [
-            "    Finished \(build.profile) profile",
-            "    Checking \(build.path) (\(summary.files) files)",
-            "    Artifacts \(joinPath(build.path, ".kira-build"))",
-            "       Target \(build.target) | jobs \(build.jobs)",
-            "      Sources \(summary.kiraFiles) .kira files | \(summary.bytes) bytes",
-        ]
+function buildLines(
+    build: borrow BuildArguments,
+    summary: borrow ProjectSummary,
+    frame: Number
+) -> [String] {
+    if frame == build.frames - 1 {
+        return ["    Finished \(build.profile) profile", "    Checking \(build.path) (\(summary.files) files)", "    Artifacts \(joinPath(build.path, ".kira-build"))", "       Target \(build.target) | jobs \(build.jobs)", "      Sources \(summary.kiraFiles) .kira files | \(summary.bytes) bytes",]
     }
     let percent = floor((frame + 1) * 100 / build.frames)
-    return [
-        "   Compiling \(summary.kiraFiles) Kira sources",
-        "    Checking \(build.path) (\(summary.files) files)",
-        "    Building \(progressBar(percent))",
-        "       Profile \(build.profile) | target \(build.target) | jobs \(build.jobs)\(build.locked ? " | locked" : "")",
-        "          Unit \(unitText(build.unit, frame)) | features \(featureText(build.feature))",
-    ]
+    return ["   Compiling \(summary.kiraFiles) Kira sources", "    Checking \(build.path) (\(summary.files) files)", "    Building \(progressBar(percent))", "       Profile \(build.profile) | target \(build.target) | jobs \(build.jobs)\(build.locked ? " | locked" : "")", "          Unit \(unitText(build.unit, frame)) | features \(featureText(build.feature))",]
 }
 
 // Prints `lines`, over the ones printed last when `redraw`.
@@ -179,13 +173,13 @@ function draw(lines: borrow [String], redraw: Bool) {
 }
 
 function json(summary: borrow ProjectSummary) -> [JsonMember] {
-    return [
-        JsonMember { name: "directories", value: .Number(summary.directories) },
-        JsonMember { name: "files", value: .Number(summary.files) },
-        JsonMember { name: "kiraFiles", value: .Number(summary.kiraFiles) },
-        JsonMember { name: "packageFiles", value: .Number(summary.packageFiles) },
-        JsonMember { name: "bytes", value: .Number(summary.bytes) },
-    ]
+    return [JsonMember { name: "directories", value: .Number(summary.directories) }, JsonMember {
+        name: "files",
+        value: .Number(summary.files)
+    }, JsonMember { name: "kiraFiles", value: .Number(summary.kiraFiles) }, JsonMember {
+        name: "packageFiles",
+        value: .Number(summary.packageFiles)
+    }, JsonMember { name: "bytes", value: .Number(summary.bytes) },]
 }
 
 // The project at `path`, its manifest and what is under it.
@@ -236,29 +230,49 @@ ParsableCommand RootCommand {
 
 ParsableCommand BuildCommand {
     let configuration: CommandConfiguration {
-        return CommandConfiguration { name: "build", aliases: ["b"], abstract: "Plan a workspace build with live cargo-style progress" }
+        return CommandConfiguration {
+            name: "build",
+            aliases: ["b"],
+            abstract: "Plan a workspace build with live cargo-style progress"
+        }
     }
 
     let arguments: [ArgumentSpec] {
-        return [
-            argument(name: "path", help: "Project directory").defaulting("."),
-            option(name: "profile", help: "Build profile").short("p").oneOf(["dev", "release"]).defaulting("dev"),
-            option(name: "target", help: "Compilation target label").short("t").aliased(["target-triple"]).defaulting("host"),
-            option(name: "jobs", help: "Concurrent job count").short("j").whole().defaulting("4"),
-            option(name: "feature", help: "Enable a feature; may be repeated").short("F").aliased(["features"]).repeating(),
-            option(name: "unit", help: "Build one workspace unit; may be repeated").short("u").aliased(["package"]).repeating(),
-            flag(name: "locked", help: "Use the locked dependency plan").short("l"),
-            flag(name: "plain", help: "Print every frame without ANSI rewriting").short("P"),
-            flag(name: "noProgress", help: "Suppress the live progress display").short("q").aliased(["no-progress"]),
-            option(name: "frames", help: "Number of progress frames").short("n").aliased(["frame-count"]).whole().defaulting("6"),
-            option(name: "delay", help: "Milliseconds between frames").short("d").aliased(["delay-ms"]).whole().defaulting("120"),
-        ]
+        return [argument(name: "path", help: "Project directory").defaulting("."), option(
+            name: "profile",
+            help: "Build profile"
+        ).short("p").oneOf(["dev", "release"]).defaulting("dev"), option(
+            name: "target",
+            help: "Compilation target label"
+        ).short("t").aliased(["target-triple"]).defaulting("host"), option(
+            name: "jobs",
+            help: "Concurrent job count"
+        ).short("j").whole().defaulting("4"), option(
+            name: "feature",
+            help: "Enable a feature; may be repeated"
+        ).short("F").aliased(["features"]).repeating(), option(
+            name: "unit",
+            help: "Build one workspace unit; may be repeated"
+        ).short("u").aliased(["package"]).repeating(), flag(
+            name: "locked",
+            help: "Use the locked dependency plan"
+        ).short("l"), flag(name: "plain", help: "Print every frame without ANSI rewriting").short(
+            "P"
+        ), flag(name: "noProgress", help: "Suppress the live progress display").short("q").aliased(
+            ["no-progress"]
+        ), option(name: "frames", help: "Number of progress frames").short("n").aliased(
+            ["frame-count"]
+        ).whole().defaulting("6"), option(name: "delay", help: "Milliseconds between frames").short(
+            "d"
+        ).aliased(["delay-ms"]).whole().defaulting("120"),]
     }
 
     function run(arguments: borrow ParsedArguments) -> Int {
         let build = parse_BuildArguments(arguments)
         if build.jobs <= 0 || build.frames <= 0 || build.delay < 0 {
-            printError("error: jobs and frames must be greater than zero, and the delay not negative")
+            printError(
+                "error: jobs and frames must be greater than zero, and the delay not negative"
+            )
             return ExampleExit.usage
         }
         let found = match project(build.path) {
@@ -272,12 +286,12 @@ ParsableCommand BuildCommand {
             printError("error: package.kira not found in \(build.path)")
             return ExampleExit.usage
         }
-        let last = Int(build.frames) - 1
+        let last = build.frames - 1
         if build.noProgress {
             draw(buildLines(build, found.summary, last), false)
             return ExampleExit.done
         }
-        for frame in 0..Int(build.frames) {
+        for frame in 0..build.frames {
             draw(buildLines(build, found.summary, frame), frame > 0 && !build.plain)
             if frame < last && build.delay > 0 { processSleep(build.delay) }
         }
@@ -287,15 +301,21 @@ ParsableCommand BuildCommand {
 
 ParsableCommand CheckCommand {
     let configuration: CommandConfiguration {
-        return CommandConfiguration { name: "check", aliases: ["c"], abstract: "Validate package.kira and source coverage" }
+        return CommandConfiguration {
+            name: "check",
+            aliases: ["c"],
+            abstract: "Validate package.kira and source coverage"
+        }
     }
 
     let arguments: [ArgumentSpec] {
-        return [
-            argument(name: "path", help: "Project directory").defaulting("."),
-            option(name: "format", help: "Output format").short("f").oneOf(["text", "json"]).defaulting("text"),
-            flag(name: "strict", help: "Require a version and Kira sources").short("S"),
-        ]
+        return [argument(name: "path", help: "Project directory").defaulting("."), option(
+            name: "format",
+            help: "Output format"
+        ).short("f").oneOf(["text", "json"]).defaulting("text"), flag(
+            name: "strict",
+            help: "Require a version and Kira sources"
+        ).short("S"),]
     }
 
     function run(arguments: borrow ParsedArguments) -> Int {
@@ -313,16 +333,17 @@ ParsableCommand CheckCommand {
             None -> 0
         }
         let valid = match found.manifest {
-            Some(manifest) -> manifestIsValid(manifest.text, check.strict) && (!check.strict || found.summary.kiraFiles > 0)
+            Some(manifest) -> manifestIsValid(manifest.text, check.strict) && (
+                !check.strict || found.summary.kiraFiles > 0
+            )
             None -> false
         }
         match outputFormat(check.format) {
             Json -> {
-                var members = [
-                    JsonMember { name: "path", value: .Text(check.path) },
-                    JsonMember { name: "valid", value: .Boolean(valid) },
-                    JsonMember { name: "manifestBytes", value: .Number(manifestBytes) },
-                ]
+                var members = [JsonMember { name: "path", value: .Text(check.path) }, JsonMember {
+                    name: "valid",
+                    value: .Boolean(valid)
+                }, JsonMember { name: "manifestBytes", value: .Number(manifestBytes) },]
                 for member in json(found.summary) { members.append(member) }
                 print(writeJson(.Object(members)))
             }
@@ -343,15 +364,21 @@ ParsableCommand CheckCommand {
 
 ParsableCommand MetadataCommand {
     let configuration: CommandConfiguration {
-        return CommandConfiguration { name: "metadata", aliases: ["m"], abstract: "Summarize a workspace like cargo metadata" }
+        return CommandConfiguration {
+            name: "metadata",
+            aliases: ["m"],
+            abstract: "Summarize a workspace like cargo metadata"
+        }
     }
 
     let arguments: [ArgumentSpec] {
-        return [
-            argument(name: "path", help: "Project directory").defaulting("."),
-            option(name: "format", help: "Output format").short("f").oneOf(["text", "json"]).defaulting("text"),
-            flag(name: "noDeps", help: "Omit dependency presence from the report").short("D").aliased(["no-deps"]),
-        ]
+        return [argument(name: "path", help: "Project directory").defaulting("."), option(
+            name: "format",
+            help: "Output format"
+        ).short("f").oneOf(["text", "json"]).defaulting("text"), flag(
+            name: "noDeps",
+            help: "Omit dependency presence from the report"
+        ).short("D").aliased(["no-deps"]),]
     }
 
     function run(arguments: borrow ParsedArguments) -> Int {
@@ -375,7 +402,9 @@ ParsableCommand MetadataCommand {
             Json -> {
                 var members = [JsonMember { name: "package", value: .Text(metadata.path) }]
                 for member in json(found.summary) { members.append(member) }
-                members.append(JsonMember { name: "hasDependencies", value: .Boolean(hasDependencies) })
+                members.append(
+                    JsonMember { name: "hasDependencies", value: .Boolean(hasDependencies) }
+                )
                 print(writeJson(.Object(members)))
             }
             Text -> {
