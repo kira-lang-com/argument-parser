@@ -68,12 +68,3 @@ function longSpellings(spec: borrow ArgumentSpec) -> String {
     for alias in spec.aliases { spellings += ", --\(alias)" }
     return spellings
 }
-
-function joined(values: borrow [String], separator: borrow String) -> String {
-    var text = ""
-    for (index, value) in values.enumerated() {
-        if index > 0 { text += separator }
-        text += value
-    }
-    return text
-}
