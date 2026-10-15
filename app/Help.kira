@@ -10,7 +10,9 @@ function helpText(command: borrow Command) -> String {
     if configuration.allowsRemainder { text += " [<arguments> ...]" }
 
     text += "\n\n" + configuration.abstract
-    if configuration.aliases.count > 0 { text += "\nAliases: " + joined(configuration.aliases, " | ") }
+    if configuration.aliases.count > 0 {
+        text += "\nAliases: " + joined(configuration.aliases, " | ")
+    }
     match configuration.defaultSubcommand {
         Some(name) -> text += "\nDefault command: \(name)"
         // Without one, a bare invocation runs the root command itself.

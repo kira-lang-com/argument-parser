@@ -58,7 +58,9 @@ struct CommandRouter {
         for command in self.commands {
             let configuration = command.configuration
             text += "\n  " + configuration.name
-            if configuration.aliases.count > 0 { text += " (" + joined(configuration.aliases, " | ") + ")" }
+            if configuration.aliases.count > 0 {
+                text += " (" + joined(configuration.aliases, " | ") + ")"
+            }
             if !configuration.abstract.isEmpty() { text += "  " + configuration.abstract }
         }
         return text
@@ -122,7 +124,11 @@ function runCommand(command: borrow Any ParsableCommand, tokens: borrow [String]
 // heterogeneous `ParsableCommand` values, while the router parses each
 // child's own schema and dispatches the typed result to the selected run
 // body: Kira's equivalent of Swift's subcommand composition.
-function runCommandRouter(root: borrow Any ParsableCommand, children: borrow [Any ParsableCommand], tokens: borrow [String]) -> Int {
+function runCommandRouter(
+    root: borrow Any ParsableCommand,
+    children: borrow [Any ParsableCommand],
+    tokens: borrow [String]
+) -> Int {
     var commands: [Command] = []
     for child in children { commands.append(commandOf(child)) }
     let router = CommandRouter { root: commandOf(root), commands: commands }
@@ -137,7 +143,11 @@ function runCommandRouter(root: borrow Any ParsableCommand, children: borrow [An
     }
 }
 
-function explained(router: borrow CommandRouter, error: borrow ArgumentError, tokens: borrow [String]) -> Int {
+function explained(
+    router: borrow CommandRouter,
+    error: borrow ArgumentError,
+    tokens: borrow [String]
+) -> Int {
     router.explain(error, tokens)
     return error.isCleanExit() ? 0 : ExitStatus.usage
 }

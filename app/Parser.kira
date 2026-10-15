@@ -24,13 +24,20 @@ struct TokenStream {
 struct ParseState {
     var command: String
     var values: [ParsedValue] = []
-    var seen: [String] = []
     var remainder: [String] = []
     // How many positional arguments have been filled.
     var positionals: Number = 0
     // Whether `--`, or the start of the remainder, has been passed: every
     // token after it is an operand, whatever it starts with.
     var operandsOnly: Bool = false
+
+    // Whether the command line gave `name` a value.
+    function provided(name: borrow String) -> Bool {
+        for value in values {
+            if value.provided && value.name == name { return true }
+        }
+        return false
+    }
 
     function add(
         borrow mut self,
@@ -39,10 +46,9 @@ struct ParseState {
     ) -> Result<Void, ArgumentError> {
         match valueOf(spec, text) {
             Some(value) -> {
-                if self.seen.contains(spec.name) && !spec.isRepeated {
+                if provided(spec.name) && !spec.isRepeated {
                     return .Error(.DuplicateArgument(spec.name))
                 }
-                self.seen.append(spec.name)
                 self.values.append(ParsedValue { name: spec.name, value: value, provided: true })
                 return .Ok
             }
@@ -51,20 +57,16 @@ struct ParseState {
     }
 }
 
-// `--name` or `--name=value`, split at the first `=`.
-struct LongOption {
-    let name: String
-    let inline: String?
-}
-
-function longOption(token: borrow String) -> LongOption {
+// `--name` or `--name=value`, split at the first `=` into the name and the
+// inline value.
+function longOption(token: borrow String) -> (String, String?) {
     let body = token.substring(2, token.count)
     match body.indexOf("=") {
-        Some(equals) -> return LongOption {
-            name: body.substring(0, equals),
-            inline: .Some(body.substring(equals + 1, body.count))
-        }
-        None -> return LongOption { name: body, inline: .None }
+        Some(equals) -> return (
+            body.substring(0, equals),
+            .Some(body.substring(equals + 1, body.count))
+        )
+        None -> return (body, .None)
     }
 }
 
@@ -225,21 +227,21 @@ struct Parser {
         stream: borrow mut TokenStream,
         state: borrow mut ParseState
     ) -> Result<Void, ArgumentError> {
-        let long = longOption(token)
-        match self.argumentNamed(long.name, .Option) {
+        let (name, inline) = longOption(token)
+        match self.argumentNamed(name, .Option) {
             Some(spec) -> {
-                match long.inline {
+                match inline {
                     Some(text) -> return state.add(spec, text)
                     None -> return takeValue(spec, stream, state)
                 }
             }
             None -> {
-                match self.argumentNamed(long.name, .Flag) {
+                match self.argumentNamed(name, .Flag) {
                     Some(spec) -> {
-                        if long.inline.isSome() { return .Error(.UnexpectedValue(long.name)) }
+                        if inline.isSome() { return .Error(.UnexpectedValue(name)) }
                         return state.add(spec, "true")
                     }
-                    None -> return .Error(.UnknownOption("--\(long.name)"))
+                    None -> return .Error(.UnknownOption("--\(name)"))
                 }
             }
         }
@@ -311,7 +313,7 @@ struct Parser {
         state: borrow mut ParseState
     ) -> Result<Void, ArgumentError> {
         for spec in self.command.arguments {
-            if state.seen.contains(spec.name) { continue }
+            if state.provided(spec.name) { continue }
             if spec.isRequired { return .Error(.MissingArgument(spec.name)) }
             match spec.defaultText {
                 Some(text) -> {

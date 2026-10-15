@@ -124,7 +124,9 @@ struct ParsedArguments {
         match self.text(name) {
             Some(text) -> return text
             None -> {
-                printError("ArgumentParser: the schema gives `\(name)` no text; make it required or give it a default")
+                printError(
+                    "ArgumentParser: the schema gives `\(name)` no text; make it required or give it a default"
+                )
                 runtimeTrap()
             }
         }
@@ -134,7 +136,9 @@ struct ParsedArguments {
         match self.number(name) {
             Some(number) -> return number
             None -> {
-                printError("ArgumentParser: the schema gives `\(name)` no number; make it required or give it a default")
+                printError(
+                    "ArgumentParser: the schema gives `\(name)` no number; make it required or give it a default"
+                )
                 runtimeTrap()
             }
         }

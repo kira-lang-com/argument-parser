@@ -23,13 +23,27 @@ comptime macro Parsable {
         var supported = true
         for field in target.fields {
             match field.type {
-                "String" -> initializers.append(quote { #{field.name}: raw.requiredText(#{field.name.asString()}) })
-                "Number", "Int" -> initializers.append(quote { #{field.name}: raw.requiredNumber(#{field.name.asString()}) })
-                "String?", "Optional<String>" -> initializers.append(quote { #{field.name}: raw.text(#{field.name.asString()}) })
-                "Number?", "Optional<Number>" -> initializers.append(quote { #{field.name}: raw.number(#{field.name.asString()}) })
-                "Bool" -> initializers.append(quote { #{field.name}: raw.flag(#{field.name.asString()}) })
-                "[String]" -> initializers.append(quote { #{field.name}: raw.texts(#{field.name.asString()}) })
-                "[Number]" -> initializers.append(quote { #{field.name}: raw.numbers(#{field.name.asString()}) })
+                "String" -> initializers.append(
+                    quote { #{field.name}: raw.requiredText(#{field.name.asString()}) }
+                )
+                "Number", "Int" -> initializers.append(
+                    quote { #{field.name}: raw.requiredNumber(#{field.name.asString()}) }
+                )
+                "String?", "Optional<String>" -> initializers.append(
+                    quote { #{field.name}: raw.text(#{field.name.asString()}) }
+                )
+                "Number?", "Optional<Number>" -> initializers.append(
+                    quote { #{field.name}: raw.number(#{field.name.asString()}) }
+                )
+                "Bool" -> initializers.append(
+                    quote { #{field.name}: raw.flag(#{field.name.asString()}) }
+                )
+                "[String]" -> initializers.append(
+                    quote { #{field.name}: raw.texts(#{field.name.asString()}) }
+                )
+                "[Number]" -> initializers.append(
+                    quote { #{field.name}: raw.numbers(#{field.name.asString()}) }
+                )
                 else -> {
                     supported = false
                     Diagnostics.error(
@@ -40,7 +54,7 @@ comptime macro Parsable {
             }
         }
         if !supported {
-            return quote { }
+            return quote {}
         }
         let fields: Syntax = Syntax.join(initializers, separator: ", ")
         return quote {
