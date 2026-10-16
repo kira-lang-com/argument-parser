@@ -1,7 +1,7 @@
 import Foundation
 
 // One value the command line gave, or a default stood in for.
-enum ArgumentValue {
+public enum ArgumentValue {
     Text(String)
     Number(Number)
     Flag(Bool)
@@ -31,7 +31,7 @@ enum ArgumentValue {
     }
 }
 
-struct ParsedValue {
+public struct ParsedValue {
     let name: String
     let value: ArgumentValue
     // Whether the command line gave it, rather than the schema's default.
@@ -43,7 +43,7 @@ struct ParsedValue {
 // Every accessor answers by the argument's name. One that names an argument
 // with no value answers `.None`, so a command tells "not given" from any value
 // it could have been given.
-struct ParsedArguments {
+public struct ParsedArguments {
     let command: String
     let values: [ParsedValue]
     // What follows the first operand of a command that allows a remainder.

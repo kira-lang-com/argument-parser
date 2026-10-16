@@ -10,7 +10,7 @@ import Foundation
 // its own tokens to `parse` deterministically.
 
 // What an argument's value reads as.
-enum ValueKind {
+public enum ValueKind {
     Text
     // A number with no fractional part: a count, a size, a number of seconds.
     Whole
@@ -20,7 +20,7 @@ enum ValueKind {
 }
 
 // Where an argument sits on the command line.
-enum ArgumentKind {
+public enum ArgumentKind {
     Positional
     Option
     Flag
@@ -34,7 +34,7 @@ enum ArgumentKind {
 //
 //     option(name: "timeout", help: "How many seconds to hold the lock")
 //         .short("t").whole().defaulting("600")
-struct ArgumentSpec {
+public struct ArgumentSpec {
     var name: String
     var kind: ArgumentKind
     var value: ValueKind = .Text
@@ -136,21 +136,21 @@ struct ArgumentSpec {
 }
 
 // A positional argument the command line must give.
-function argument(name: String, help: String) -> ArgumentSpec {
+public function argument(name: String, help: String) -> ArgumentSpec {
     return ArgumentSpec { name: name, kind: .Positional, help: help, isRequired: true }
 }
 
 // An option taking a value, `--name VALUE` or `--name=VALUE`.
-function option(name: String, help: String) -> ArgumentSpec {
+public function option(name: String, help: String) -> ArgumentSpec {
     return ArgumentSpec { name: name, kind: .Option, help: help }
 }
 
 // A flag, true when given.
-function flag(name: String, help: String) -> ArgumentSpec {
+public function flag(name: String, help: String) -> ArgumentSpec {
     return ArgumentSpec { name: name, kind: .Flag, value: .Boolean, valueName: "", help: help }
 }
 
-struct CommandConfiguration {
+public struct CommandConfiguration {
     let name: String
     let aliases: [String] = []
     let abstract: String = ""
@@ -167,7 +167,7 @@ struct CommandConfiguration {
     }
 }
 
-struct Command {
+public struct Command {
     let configuration: CommandConfiguration
     let arguments: [ArgumentSpec]
 }
@@ -176,10 +176,10 @@ struct Command {
 // without making the parser depend on one concrete command type. A command
 // backed by this family provides its own configuration and execution body; a
 // plain `Command` value remains useful for data-only commands and tests.
-construct ParsableCommand {
+public construct ParsableCommand {
     @Required let configuration: CommandConfiguration
     @Required let arguments: [ArgumentSpec]
-    @Required function run(arguments: borrow ParsedArguments) -> Int
+    @Required function run(arguments: borrow ParsedArguments) -> Number
 }
 
 // Keeps the construct family materialized in a library-only build as well as
@@ -194,11 +194,11 @@ ParsableCommand EmptyCommand {
         return []
     }
 
-    function run(arguments: borrow ParsedArguments) -> Int {
+    function run(arguments: borrow ParsedArguments) -> Number {
         return 0
     }
 }
 
-function commandOf(command: borrow Any ParsableCommand) -> Command {
+public function commandOf(command: borrow Any ParsableCommand) -> Command {
     return Command { configuration: command.configuration, arguments: command.arguments }
 }

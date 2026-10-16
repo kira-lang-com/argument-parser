@@ -59,7 +59,7 @@ ParsableCommand RepeatCommand {
         ]
     }
 
-    function run(arguments: borrow ParsedArguments) -> Int {
+    function run(arguments: borrow ParsedArguments) -> Number {
         let parsed = parse_RepeatArguments(arguments)
         for index in 1..parsed.count + 1 {
             print(parsed.includeCounter ? "\(index): \(parsed.phrase)" : parsed.phrase)
@@ -69,7 +69,7 @@ ParsableCommand RepeatCommand {
 }
 
 @Main
-function main() -> Int {
+function main() -> Number {
     return runCommand(RepeatCommand(), commandLineArguments())
 }
 ```

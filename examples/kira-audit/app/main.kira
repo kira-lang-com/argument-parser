@@ -32,9 +32,9 @@ struct ExplainArguments {
 }
 
 namespace AuditExit {
-    let done: Int = 0
-    let failed: Int = 1
-    let usage: Int = 2
+    let done: Number = 0
+    let failed: Number = 1
+    let usage: Number = 2
 }
 
 enum OutputFormat {
@@ -149,7 +149,7 @@ ParsableCommand RootCommand {
         return []
     }
 
-    function run(arguments: borrow ParsedArguments) -> Int {
+    function run(arguments: borrow ParsedArguments) -> Number {
         print("kira-audit: choose scan, check, or explain")
         return AuditExit.done
     }
@@ -171,7 +171,7 @@ ParsableCommand ScanCommand {
         ]
     }
 
-    function run(arguments: borrow ParsedArguments) -> Int {
+    function run(arguments: borrow ParsedArguments) -> Number {
         let scan = parse_ScanArguments(arguments)
         if !pathExists(scan.path) {
             printError("error: path does not exist: \(scan.path)")
@@ -226,7 +226,7 @@ ParsableCommand CheckCommand {
         ]
     }
 
-    function run(arguments: borrow ParsedArguments) -> Int {
+    function run(arguments: borrow ParsedArguments) -> Number {
         let check = parse_CheckArguments(arguments)
         let manifestPath = joinPath(check.path, "package.kira")
         var valid = false
@@ -273,7 +273,7 @@ ParsableCommand ExplainCommand {
         ]
     }
 
-    function run(arguments: borrow ParsedArguments) -> Int {
+    function run(arguments: borrow ParsedArguments) -> Number {
         let explain = parse_ExplainArguments(arguments)
         let file = match readFile(explain.path) {
             Ok(contents) -> contents
@@ -296,7 +296,7 @@ ParsableCommand ExplainCommand {
 }
 
 @Main
-function main() -> Int {
+function main() -> Number {
     let root = RootCommand()
     let children: [Any ParsableCommand] = [ScanCommand(), CheckCommand(), ExplainCommand()]
     return runCommandRouter(root, children, commandLineArguments())

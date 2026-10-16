@@ -3,7 +3,7 @@ import Foundation
 // Why a command line was not parsed. `HelpRequested` and `VersionRequested`
 // are not mistakes, but they end parsing the same way: the command shows what
 // was asked for instead of running.
-enum ArgumentError {
+public enum ArgumentError {
     UnknownOption(String)
     UnknownCommand(String)
     MissingValue(String)

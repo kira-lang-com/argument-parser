@@ -36,9 +36,9 @@ struct MetadataArguments {
 }
 
 namespace ExampleExit {
-    let done: Int = 0
-    let invalid: Int = 1
-    let usage: Int = 2
+    let done: Number = 0
+    let invalid: Number = 1
+    let usage: Number = 2
 }
 
 namespace Walk {
@@ -222,7 +222,7 @@ ParsableCommand RootCommand {
         return []
     }
 
-    function run(arguments: borrow ParsedArguments) -> Int {
+    function run(arguments: borrow ParsedArguments) -> Number {
         print("kira-build: choose build, check, or metadata")
         return ExampleExit.done
     }
@@ -267,7 +267,7 @@ ParsableCommand BuildCommand {
         ).aliased(["delay-ms"]).whole().defaulting("120"),]
     }
 
-    function run(arguments: borrow ParsedArguments) -> Int {
+    function run(arguments: borrow ParsedArguments) -> Number {
         let build = parse_BuildArguments(arguments)
         if build.jobs <= 0 || build.frames <= 0 || build.delay < 0 {
             printError(
@@ -318,7 +318,7 @@ ParsableCommand CheckCommand {
         ).short("S"),]
     }
 
-    function run(arguments: borrow ParsedArguments) -> Int {
+    function run(arguments: borrow ParsedArguments) -> Number {
         let check = parse_CheckArguments(arguments)
         let found = match project(check.path) {
             Ok(value) -> value
@@ -381,7 +381,7 @@ ParsableCommand MetadataCommand {
         ).short("D").aliased(["no-deps"]),]
     }
 
-    function run(arguments: borrow ParsedArguments) -> Int {
+    function run(arguments: borrow ParsedArguments) -> Number {
         let metadata = parse_MetadataArguments(arguments)
         let found = match project(metadata.path) {
             Ok(value) -> value
@@ -423,7 +423,7 @@ ParsableCommand MetadataCommand {
 }
 
 @Main
-function main() -> Int {
+function main() -> Number {
     let root = RootCommand()
     let children: [Any ParsableCommand] = [BuildCommand(), CheckCommand(), MetadataCommand()]
     return runCommandRouter(root, children, commandLineArguments())

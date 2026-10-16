@@ -120,7 +120,7 @@ function numberIn(text: borrow String) -> Number? {
 }
 
 // Parses a command line against one command's schema.
-struct Parser {
+public struct Parser {
     let command: Command
 
     function argumentNamed(

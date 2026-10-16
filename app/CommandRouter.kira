@@ -1,16 +1,16 @@
 import Foundation
 
-namespace ExitStatus {
+public namespace ExitStatus {
     // What a command exits with when its command line was wrong, as Swift
     // ArgumentParser's `validationFailure` does: sysexits' `EX_USAGE`.
-    let usage: Int = 64
+    let usage: Number = 64
 }
 
 // A Parser owns one command schema. CommandRouter adds independent child
 // schemas, which is the difference between a help-only list of subcommands
 // and a real multi-command CLI. Each child is still an ordinary Command, so it
 // is assembled with the same constructors and has its own argument model.
-struct CommandRouter {
+public struct CommandRouter {
     let root: Command
     let commands: [Command] = []
 
@@ -97,7 +97,7 @@ struct CommandRouter {
 
 // The arguments the process was started with, its own path excluded, as
 // Swift's ArgumentParser and the OS-level argv APIs it models read them.
-function commandLineArguments() -> [String] {
+public function commandLineArguments() -> [String] {
     var arguments: [String] = []
     for index in 0..processArgumentCount() {
         match processArgument(index) {
@@ -112,7 +112,7 @@ function commandLineArguments() -> [String] {
 // Runs a construct-backed command as a complete CLI: builds the schema,
 // parses `tokens`, shows help or the version, or runs the command's body
 // with the validated arguments. Answers the status the program exits with.
-function runCommand(command: borrow Any ParsableCommand, tokens: borrow [String]) -> Int {
+public function runCommand(command: borrow Any ParsableCommand, tokens: borrow [String]) -> Number {
     let router = CommandRouter { root: commandOf(command) }
     match router.parse(tokens) {
         Ok(parsed) -> return command.run(parsed)
@@ -124,11 +124,11 @@ function runCommand(command: borrow Any ParsableCommand, tokens: borrow [String]
 // heterogeneous `ParsableCommand` values, while the router parses each
 // child's own schema and dispatches the typed result to the selected run
 // body: Kira's equivalent of Swift's subcommand composition.
-function runCommandRouter(
+public function runCommandRouter(
     root: borrow Any ParsableCommand,
     children: borrow [Any ParsableCommand],
     tokens: borrow [String]
-) -> Int {
+) -> Number {
     var commands: [Command] = []
     for child in children { commands.append(commandOf(child)) }
     let router = CommandRouter { root: commandOf(root), commands: commands }
@@ -147,7 +147,7 @@ function explained(
     router: borrow CommandRouter,
     error: borrow ArgumentError,
     tokens: borrow [String]
-) -> Int {
+) -> Number {
     router.explain(error, tokens)
     return error.isCleanExit() ? 0 : ExitStatus.usage
 }

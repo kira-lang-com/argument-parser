@@ -2,7 +2,7 @@ import Foundation
 
 // The help a command shows, generated from the same schema that parses it.
 
-function helpText(command: borrow Command) -> String {
+public function helpText(command: borrow Command) -> String {
     let configuration = command.configuration
     var text = "USAGE: \(configuration.name)"
     if configuration.subcommands.count > 0 { text += " <subcommand>" }
