@@ -1,3 +1,7 @@
 # 26.10.4
 
-Initial source release: Command-line parsing with typed argument, option, and flag schemas, help, version handling, and command routing.
+The first source release of ArgumentParser includes:
+
+- Schemas for positional arguments, options, flags, and their modifiers.
+- `@Derive(Parsable)` to project parsed arguments into typed Kira values.
+- Command execution and routing with help, version, and error handling.
