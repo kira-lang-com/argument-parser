@@ -1,0 +1,5 @@
+import Foundation
+
+construct SurveyStrict() extends LintDefaults {
+    let groups: [LintGroup] = [.Pedantic, .Restriction]
+}

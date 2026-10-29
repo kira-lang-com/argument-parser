@@ -1,0 +1,91 @@
+//! Generates the help a command shows, from the same schema that parses it.
+//!
+//! The usage line, the option list and the subcommand list are all derived
+//! from a [`Command`]'s configuration and arguments, so the help cannot drift
+//! from what the parser accepts.
+
+import Foundation
+
+/// Returns the help text a command shows for `-h` or `--help`.
+///
+/// The text has a usage line, the abstract and discussion, and then the
+/// options and subcommands the schema declares.
+///
+/// # Examples
+///
+/// ```kira
+/// let help = helpText(Command {
+///     configuration: CommandConfiguration { name: "greet", abstract: "Say hello" },
+///     arguments: [argument("name", "Who to greet")]
+/// })
+/// ```
+public function helpText(command: borrow Command) -> String {
+    let configuration = command.configuration
+    var text = "USAGE: \(configuration.name)"
+    if configuration.subcommands.count > 0 { text += " <subcommand>" }
+    for spec in command.arguments { text += usageOf(spec) }
+    if configuration.allowsRemainder { text += " [<arguments> ...]" }
+
+    text += "\n\n" + configuration.abstract
+    if configuration.aliases.count > 0 {
+        text += "\nAliases: " + joined(configuration.aliases, " | ")
+    }
+    match configuration.defaultSubcommand {
+        Some(name) -> text += "\nDefault command: \(name)"
+        // Without one, a bare invocation runs the root command itself.
+        None -> {}
+    }
+    if !configuration.discussion.isEmpty() { text += "\n\n" + configuration.discussion }
+
+    text += "\n\nOPTIONS:\n  -h, --help  Show help"
+    if configuration.version.isSome() { text += "\n  -V, --version  Show version" }
+    for spec in command.arguments { text += "\n  " + describedOption(spec) }
+    if configuration.subcommands.count > 0 {
+        text += "\n\nCOMMANDS:"
+        for subcommand in configuration.subcommands { text += "\n  " + subcommand }
+    }
+    return text
+}
+
+/// How an argument shows in the usage line: `<path>`, `[--verbose]`, `--profile <VALUE>`.
+///
+/// Required arguments appear bare, and optional ones in brackets.
+function usageOf(spec: borrow ArgumentSpec) -> String {
+    match spec.kind {
+        Positional -> return spec.isRequired ? " <\(spec.name)>" : " [<\(spec.name)>]"
+        Flag -> return " [--\(spec.name)]"
+        Option -> {
+            let usage = "--\(spec.name) <\(spec.valueName)>"
+            return spec.isRequired ? " " + usage : " [" + usage + "]"
+        }
+    }
+}
+
+/// An argument's line in the options list: its spellings, help and accepted choices.
+function describedOption(spec: borrow ArgumentSpec) -> String {
+    var line = spellingsOf(spec)
+    if !spec.help.isEmpty() { line += "  " + spec.help }
+    if spec.choices.count > 0 { line += " (" + joined(spec.choices, " | ") + ")" }
+    return line
+}
+
+/// The spelling of an argument as the options list shows it.
+function spellingsOf(spec: borrow ArgumentSpec) -> String {
+    match spec.kind {
+        Positional -> return "<\(spec.name)>"
+        Flag -> return longSpellings(spec)
+        Option -> return longSpellings(spec) + " <\(spec.valueName)>"
+    }
+}
+
+/// The long and short spellings of an argument, such as `-t, --timeout, --wait`.
+function longSpellings(spec: borrow ArgumentSpec) -> String {
+    var spellings = "--\(spec.name)"
+    match spec.shortName {
+        Some(letter) -> spellings = "-\(letter), " + spellings
+        // Only the long spellings exist.
+        None -> {}
+    }
+    for alias in spec.aliases { spellings += ", --\(alias)" }
+    return spellings
+}

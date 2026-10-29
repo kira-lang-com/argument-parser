@@ -1,0 +1,409 @@
+//! A file-backed command-line tool that walks a workspace, checks its package
+//! manifest, and explains individual files.
+//!
+//! Its commands exercise the composition the ArgumentParser library is built for:
+//! derived typed arguments, independent subcommands, aliases, defaults, choices,
+//! repeated options, and generated help. Run it as `kira-audit` (or `audit`); with
+//! no subcommand it runs `scan`.
+import Foundation
+import ArgumentParser
+
+/// The validated options of the `scan` command.
+@Derive(Parsable)
+struct ScanArguments {
+    /// The directory or file to inspect.
+    let path: String
+    /// The deepest directory level the scan enters.
+    let maxDepth: Number
+    /// The output format, `text` or `json`.
+    let format: String
+    /// Whether entries whose name starts with a dot are counted.
+    let includeHidden: Bool
+    /// Entry names to skip, at any depth.
+    let exclude: [String]
+    /// Whether the scan fails when it finds no Kira source file.
+    let strict: Bool
+}
+
+/// The validated options of the `check` command.
+@Derive(Parsable)
+struct CheckArguments {
+    /// The directory that holds the `package.kira` to check.
+    let path: String
+    /// The output format, `text` or `json`.
+    let format: String
+    /// Whether the manifest must declare a version.
+    let strict: Bool
+}
+
+/// The validated options of the `explain` command.
+@Derive(Parsable)
+struct ExplainArguments {
+    /// The file to inspect.
+    let path: String
+    /// How many lines the preview shows.
+    let lines: Number
+    /// Whether the whole file is printed instead of a preview.
+    let raw: Bool
+}
+
+/// Exit statuses this example returns from `main`.
+namespace AuditExit {
+    /// The command finished.
+    let done: Number = 0
+    /// The command ran and found a problem: an invalid manifest, a failed scan, or an unreadable file.
+    let failed: Number = 1
+    /// The command line named a missing path or an out-of-range value.
+    let usage: Number = 2
+}
+
+/// The output format a command writes.
+enum OutputFormat {
+    /// Plain lines of text.
+    Text
+    /// One JSON object.
+    Json
+}
+
+// The format a `--format` names; its choices are `text` and `json`.
+/// Returns the output format a `--format` value names.
+///
+/// Anything other than `json` is `Text`. The option itself refuses other values.
+function outputFormat(name: borrow String) -> OutputFormat {
+    match name {
+        "json" -> return .Json
+        else -> return .Text
+    }
+}
+
+/// Counts of what a scan found.
+struct ScanSummary {
+    /// The number of files.
+    var files: Number = 0
+    /// The number of directories, the scanned path included.
+    var directories: Number = 0
+    /// The total size of the files, in bytes.
+    var bytes: Number = 0
+    /// The number of files whose name ends in `.kira`.
+    var kiraFiles: Number = 0
+
+    /// Returns the sum of this summary and `other`, field by field.
+    function adding(borrow self, other: borrow ScanSummary) -> ScanSummary {
+        return ScanSummary {
+            files: self.files + other.files,
+            directories: self.directories + other.directories,
+            bytes: self.bytes + other.bytes,
+            kiraFiles: self.kiraFiles + other.kiraFiles,
+        }
+    }
+}
+
+// What a scan walks into.
+/// The rules a scan applies to every entry it meets.
+struct ScanRules {
+    /// The deepest directory level the scan enters.
+    let maxDepth: Number
+    /// Whether entries whose name starts with a dot are admitted.
+    let includeHidden: Bool
+    /// Entry names that are never admitted.
+    let excluded: [String]
+
+    /// Returns whether an entry called `name` is scanned.
+    ///
+    /// Dot-prefixed names are refused unless hidden entries are included, and
+    /// excluded names are always refused.
+    function admits(borrow self, name: borrow String) -> Bool {
+        if !self.includeHidden && name.startsWith(".") { return false }
+        return !self.excluded.contains(name)
+    }
+}
+
+/// Returns `name` placed under `base`, with one separator between them.
+///
+/// An empty `base` returns `name` alone.
+function joinPath(base: borrow String, name: borrow String) -> String {
+    if base.isEmpty() { return name }
+    if base.endsWith("/") || base.endsWith("\\") { return base + name }
+    return "\(base)/\(name)"
+}
+
+/// Returns the summary of `path`, descending at most `rules.maxDepth` directory levels below `depth`.
+///
+/// Entries that the rules refuse are skipped. A path that is neither a file nor a directory has an empty summary.
+///
+/// # Errors
+///
+/// Returns the failure of the first file or directory that cannot be read.
+function scanned(
+    path: borrow String,
+    depth: Number,
+    rules: borrow ScanRules
+) -> Result<ScanSummary, FileFailure> {
+    if fileExists(path) {
+        let size = match fileSize(path) {
+            Ok(bytes) -> bytes
+            Error(failure) -> return .Error(failure)
+        }
+        return .Ok(ScanSummary { files: 1, bytes: size, kiraFiles: path.endsWith(".kira") ? 1 : 0 })
+    }
+    if !isDirectory(path) { return .Ok(ScanSummary {}) }
+    var summary = ScanSummary { directories: 1 }
+    if depth >= rules.maxDepth { return .Ok(summary) }
+    let listing = match listDirectory(path) {
+        Ok(found) -> found
+        Error(failure) -> return .Error(failure)
+    }
+    for name in listing.entries {
+        if !rules.admits(name) { continue }
+        match scanned(joinPath(path, name), depth + 1, rules) {
+            Ok(inner) -> summary = summary.adding(inner)
+            Error(failure) -> return .Error(failure)
+        }
+    }
+    return .Ok(summary)
+}
+
+// How many lines `text` has, a last one without a newline included.
+/// Returns the number of lines in `text`.
+///
+/// A last line without a newline is counted. Empty text has no lines.
+function lineCount(text: borrow String) -> Number {
+    if text.isEmpty() { return 0 }
+    let lines = text.split("\n")
+    return text.endsWith("\n") ? lines.count - 1 : lines.count
+}
+
+// The first `maximum` lines of `text`.
+/// Returns the first `maximum` lines of `text`, joined by newlines.
+function previewLines(text: borrow String, maximum: Number) -> String {
+    var preview = ""
+    for (index, line) in text.split("\n").enumerated() {
+        if index >= maximum { break }
+        preview += index > 0 ? "\n\(line)" : line
+    }
+    return preview
+}
+
+// A manifest declares a package and its kind; a strict one its version too.
+/// Returns whether a manifest declares a package with a kind.
+///
+/// A strict check also requires a `version` member.
+function manifestIsValid(text: borrow String, strict: Bool) -> Bool {
+    if !text.contains("Package") || !text.contains("let kind") { return false }
+    return !strict || text.contains("let version")
+}
+
+/// The root command, `kira-audit`. It names the subcommands and has no work of its own.
+ParsableCommand RootCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration {
+            name: "kira-audit",
+            aliases: ["audit"],
+            abstract: "Inspect a Kira workspace from the command line",
+            discussion: "Walk source trees, validate package.kira, or inspect a file without leaving the shell.",
+            version: .Some("0.1.0"),
+            subcommands: ["scan", "check", "explain"],
+            defaultSubcommand: .Some("scan"),
+        }
+    }
+
+    let arguments: [ArgumentSpec] {
+        return []
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Number {
+        print("kira-audit: choose scan, check, or explain")
+        return AuditExit.done
+    }
+}
+
+/// The `scan` command: summarizes a directory tree or a single file.
+ParsableCommand ScanCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration {
+            name: "scan",
+            aliases: ["s"],
+            abstract: "Summarize a workspace tree"
+        }
+    }
+
+    let arguments: [ArgumentSpec] {
+        return [
+            argument(name: "path", help: "Directory or file to inspect").defaulting("."),
+            option(name: "maxDepth", help: "Maximum directory depth to walk").short("d").aliased(
+                ["max-depth"]
+            ).whole().defaulting("2"),
+            option(name: "format", help: "Output format").short("f").oneOf(
+                ["text", "json"]
+            ).defaulting("text"),
+            flag(name: "includeHidden", help: "Include dot-prefixed entries").short("H").aliased(
+                ["hidden"]
+            ),
+            option(name: "exclude", help: "Skip an entry name; may be repeated").short("e").aliased(
+                ["ignore"]
+            ).repeating(),
+            flag(name: "strict", help: "Require at least one Kira source file").short("S"),
+        ]
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Number {
+        let scan = parse_ScanArguments(arguments)
+        if !pathExists(scan.path) {
+            printError("error: path does not exist: \(scan.path)")
+            return AuditExit.usage
+        }
+        if scan.maxDepth < 0 {
+            printError("error: max-depth must be non-negative")
+            return AuditExit.usage
+        }
+        let rules = ScanRules {
+            maxDepth: scan.maxDepth,
+            includeHidden: scan.includeHidden,
+            excluded: scan.exclude
+        }
+        let summary = match scanned(scan.path, 0, rules) {
+            Ok(found) -> found
+            Error(failure) -> {
+                printError("error: cannot scan \(scan.path): \(traceText(failure))")
+                return AuditExit.failed
+            }
+        }
+        match outputFormat(scan.format) {
+            Json -> print(
+                writeJson(
+                    .Object(
+                        [
+                            JsonMember { name: "path", value: .Text(scan.path) },
+                            JsonMember { name: "directories", value: .Number(summary.directories) },
+                            JsonMember { name: "files", value: .Number(summary.files) },
+                            JsonMember { name: "kiraFiles", value: .Number(summary.kiraFiles) },
+                            JsonMember { name: "bytes", value: .Number(summary.bytes) },
+                        ]
+                    )
+                )
+            )
+            Text -> {
+                print("path: \(scan.path)")
+                print("directories: \(summary.directories)")
+                print("files: \(summary.files)")
+                print("kira files: \(summary.kiraFiles)")
+                print("bytes: \(summary.bytes)")
+            }
+        }
+        if scan.strict && summary.kiraFiles == 0 {
+            printError("error: no .kira source files found")
+            return AuditExit.failed
+        }
+        return AuditExit.done
+    }
+}
+
+/// The `check` command: validates the `package.kira` in a directory.
+ParsableCommand CheckCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration {
+            name: "check",
+            aliases: ["c"],
+            abstract: "Validate a package.kira manifest"
+        }
+    }
+
+    let arguments: [ArgumentSpec] {
+        return [
+            argument(name: "path", help: "Package directory").defaulting("."),
+            option(name: "format", help: "Output format").short("f").oneOf(
+                ["text", "json"]
+            ).defaulting("text"),
+            flag(name: "strict", help: "Require a version declaration").short("S"),
+        ]
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Number {
+        let check = parse_CheckArguments(arguments)
+        let manifestPath = joinPath(check.path, "package.kira")
+        var valid = false
+        var bytes: Number = 0
+        match readFile(manifestPath) {
+            Ok(manifest) -> {
+                valid = manifestIsValid(manifest.text, check.strict)
+                bytes = manifest.size
+            }
+            // A manifest that cannot be read is an invalid one, which is
+            // what this reports.
+            Error(failure) -> absorb failure
+        }
+        match outputFormat(check.format) {
+            Json -> print(
+                writeJson(
+                    .Object(
+                        [
+                            JsonMember { name: "path", value: .Text(manifestPath) },
+                            JsonMember { name: "valid", value: .Boolean(valid) },
+                            JsonMember { name: "bytes", value: .Number(bytes) },
+                        ]
+                    )
+                )
+            )
+            Text -> {
+                if !valid {
+                    print("invalid: \(manifestPath)")
+                    print("expected a Package declaration and a kind declaration")
+                    return AuditExit.failed
+                }
+                print("valid: \(manifestPath)")
+                print("bytes: \(bytes)")
+            }
+        }
+        return AuditExit.done
+    }
+}
+
+/// The `explain` command: prints a file's size, line count and a preview.
+ParsableCommand ExplainCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration {
+            name: "explain",
+            aliases: ["why"],
+            abstract: "Inspect one source file"
+        }
+    }
+
+    let arguments: [ArgumentSpec] {
+        return [
+            argument(name: "path", help: "File to inspect"),
+            option(name: "lines", help: "Number of lines to preview").short("n").whole().defaulting(
+                "8"
+            ),
+            flag(name: "raw", help: "Print the complete file").short("r"),
+        ]
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Number {
+        let explain = parse_ExplainArguments(arguments)
+        let file = match readFile(explain.path) {
+            Ok(contents) -> contents
+            Error(failure) -> {
+                printError("error: cannot read \(explain.path): \(traceText(failure))")
+                return AuditExit.usage
+            }
+        }
+        print("path: \(explain.path)")
+        print("bytes: \(file.size)")
+        print("lines: \(lineCount(file.text))")
+        if explain.raw {
+            print(file.text)
+        } else {
+            print("preview:")
+            print(previewLines(file.text, explain.lines))
+        }
+        return AuditExit.done
+    }
+}
+
+/// The entry point. Routes the command line to its subcommand and returns the exit status.
+@Main
+function main() -> Number {
+    let root = RootCommand()
+    let children: [Any ParsableCommand] = [ScanCommand(), CheckCommand(), ExplainCommand()]
+    return runCommandRouter(root, children, commandLineArguments())
+}

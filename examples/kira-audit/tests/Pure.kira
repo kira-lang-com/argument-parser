@@ -1,0 +1,54 @@
+import Foundation
+
+// The helpers that do the work without the filesystem.
+
+@Test
+function lineCountCountsAnUnterminatedLastLine() {
+    expect!(lineCount("") == 0)
+    expect!(lineCount("one") == 1)
+    expect!(lineCount("one\ntwo") == 2)
+    expect!(lineCount("one\ntwo\n") == 2)
+}
+
+@Test
+function previewKeepsTheFirstLinesOnly() {
+    expect!(previewLines("a\nb\nc", 2) == "a\nb")
+    expect!(previewLines("a\nb", 5) == "a\nb")
+}
+
+@Test
+function ruleRefusesHiddenAndExcludedNames() {
+    let hiddenRefused = ScanRules { maxDepth: 1, includeHidden: false, excluded: [] }
+    expect!(!hiddenRefused.admits(".git"))
+    expect!(hiddenRefused.admits("src"))
+    let hiddenKept = ScanRules { maxDepth: 1, includeHidden: true, excluded: ["target"] }
+    expect!(hiddenKept.admits(".git"))
+    expect!(!hiddenKept.admits("target"))
+}
+
+@Test
+function summariesAddFieldByField() {
+    let first = ScanSummary { files: 2, directories: 1, bytes: 10, kiraFiles: 1 }
+    let second = ScanSummary { files: 1, directories: 2, bytes: 5, kiraFiles: 0 }
+    let total = first.adding(second)
+    expect!(total.files == 3)
+    expect!(total.directories == 3)
+    expect!(total.bytes == 15)
+    expect!(total.kiraFiles == 1)
+}
+
+@Test
+function outputFormatReadsJson() {
+    let json = match outputFormat("json") {
+        Json -> true
+        Text -> false
+    }
+    expect!(json)
+}
+
+@Test
+function manifestNeedsAKindAndAStrictOneAVersion() {
+    expect!(manifestIsValid("construct P extends Package { let kind: PackageKind = .App }", false))
+    expect!(!manifestIsValid("construct P extends Package { let kind: PackageKind = .App }", true))
+    expect!(!manifestIsValid("construct P { let version: String = \"1\" }", false))
+}

@@ -1,0 +1,69 @@
+//! The reasons a command line is not parsed, and how each one is shown.
+//!
+//! A parse failure is an [`ArgumentError`]. The two requests, for help and for
+//! the version, travel through the same type so that the command can answer
+//! both in one place.
+
+import Foundation
+
+/// Why a command line was not parsed, or what it asked for instead.
+///
+/// [`ArgumentError.HelpRequested`] and [`ArgumentError.VersionRequested`] are
+/// not mistakes. They end parsing the same way: the command shows what was
+/// asked for instead of running.
+public enum ArgumentError {
+    /// An option or flag name the command does not declare. Carries the spelling as typed, such as `--verbos`.
+    UnknownOption(String)
+    /// A subcommand name the router does not know. Carries the name as typed.
+    UnknownCommand(String)
+    /// An option was given without the value that must follow it. Carries the option's name.
+    MissingValue(String)
+    /// A flag was given with an inline value, such as `--verbose=yes`. Carries the flag's name.
+    UnexpectedValue(String)
+    /// A required argument is absent from the command line. Carries the argument's name.
+    MissingArgument(String)
+    /// A value does not match its argument's kind or choices. Carries the argument's name.
+    InvalidValue(String)
+    /// An argument that may be given once was given twice. Carries the argument's name.
+    DuplicateArgument(String)
+    /// An operand no positional argument takes, in a command with no remainder. Carries the operand as typed.
+    UnexpectedArgument(String)
+    /// The command line asked for help with `-h` or `--help`.
+    HelpRequested
+    /// The command line asked for the version with `-V` or `--version`, on a command that has one.
+    VersionRequested
+
+    /// Returns the message a user reads for this error, without a trailing newline.
+    ///
+    /// # Examples
+    ///
+    /// ```kira
+    /// let text = ArgumentError.UnknownOption("--verbos").description()
+    /// ```
+    function description(borrow self) -> String {
+        match self {
+            UnknownOption(name) -> return "unknown option: \(name)"
+            UnknownCommand(name) -> return "unknown command: \(name)"
+            MissingValue(name) -> return "missing value for --\(name)"
+            UnexpectedValue(name) -> return "flag does not accept a value: --\(name)"
+            MissingArgument(name) -> return "missing required argument: \(name)"
+            InvalidValue(name) -> return "invalid value for argument: \(name)"
+            DuplicateArgument(name) -> return "argument may only be provided once: \(name)"
+            UnexpectedArgument(name) -> return "unexpected argument: \(name)"
+            HelpRequested -> return "help requested"
+            VersionRequested -> return "version requested"
+        }
+    }
+
+    /// Whether the command line asked for help or the version.
+    ///
+    /// A program answers either request and then exits successfully. Every
+    /// other case is a mistake in the command line, and exits with a failure.
+    function isCleanExit(borrow self) -> Bool {
+        match self {
+            HelpRequested, VersionRequested -> return true
+            UnknownOption, UnknownCommand, MissingValue, UnexpectedValue -> return false
+            MissingArgument, InvalidValue, DuplicateArgument, UnexpectedArgument -> return false
+        }
+    }
+}

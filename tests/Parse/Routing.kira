@@ -1,0 +1,96 @@
+import Foundation
+
+// Where a command line stops being options: `--`, the remainder, the help and
+// version requests, and the choice of subcommand.
+
+@Test
+function doubleDashEndsTheOptions() {
+    let arguments = [argument("path", "The input")]
+    expect!(parsedFor(arguments, ["--", "--verbose"]).requiredText("path") == "--verbose")
+}
+
+@Test
+function helpIsRequestedByEitherSpelling() {
+    let arguments = [flag("verbose", "Print more")]
+    expect!(outcomeText(arguments, ["-h"]) == "help requested")
+    expect!(outcomeText(arguments, ["--help"]) == "help requested")
+}
+
+@Test
+function versionIsRequestedOnlyWhenTheCommandHasOne() {
+    let plain = [flag("verbose", "Print more")]
+    expect!(outcomeText(plain, ["--version"]) == "unknown option: --version")
+
+    let versioned = Command {
+        configuration: CommandConfiguration { name: "tool", version: .Some("1.2") },
+        arguments: plain
+    }
+    let parser = Parser { command: versioned }
+    let outcome = match parser.parse(["-V"]) {
+        Ok(parsed) -> "ok"
+        Error(error) -> error.description()
+    }
+    expect!(outcome == "version requested")
+}
+
+@Test
+function remainderRunsToTheEndOncePositionalsAreFull() {
+    let arguments = [argument("command", "What to run")]
+    let runner = Command {
+        configuration: CommandConfiguration { name: "run", allowsRemainder: true },
+        arguments: arguments
+    }
+    let remainder = Parser { command: runner }.parse(["make", "x", "-u"])
+    let kept = match remainder {
+        Ok(parsed) -> parsed.remainder
+        Error(error) -> []
+    }
+    expect!(kept.count == 2)
+    expect!(kept[0] == "x")
+    expect!(kept[1] == "-u")
+}
+
+@Test
+function routerChoosesTheSubcommandByItsName() {
+    let build = Command {
+        configuration: CommandConfiguration { name: "build", aliases: ["b"], abstract: "Build it" },
+        arguments: [flag("release", "Optimise").short("r")]
+    }
+    let router = CommandRouter {
+        root: Command { configuration: CommandConfiguration { name: "tool" }, arguments: [] },
+        commands: [build]
+    }
+    let parsed = match router.parse(["b", "--release"]) {
+        Ok(value) -> value
+        Error(error) -> ParsedArguments { command: "error", values: [], remainder: [] }
+    }
+    expect!(parsed.command == "build")
+    expect!(parsed.flag("release"))
+}
+
+@Test
+function routerReportsAnUnknownSubcommand() {
+    let router = CommandRouter {
+        root: Command { configuration: CommandConfiguration { name: "tool" }, arguments: [] },
+        commands: [Command { configuration: CommandConfiguration { name: "build" }, arguments: [] }]
+    }
+    let outcome = match router.parse(["deploy"]) {
+        Ok(value) -> "ok"
+        Error(error) -> error.description()
+    }
+    expect!(outcome == "unknown command: deploy")
+}
+
+@Test
+function routerHelpListsEverySubcommand() {
+    let router = CommandRouter {
+        root: Command { configuration: CommandConfiguration { name: "tool" }, arguments: [] },
+        commands: [Command {
+            configuration: CommandConfiguration { name: "build", abstract: "Build it" },
+            arguments: []
+        }]
+    }
+    let text = router.help()
+    expect!(text.contains("COMMAND DETAILS:"))
+    expect!(text.contains("  build  Build it"))
+}

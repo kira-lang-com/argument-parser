@@ -1,0 +1,57 @@
+import Foundation
+import ArgumentParser
+
+// The command line kira-audit accepts: subcommands, aliases, the default
+// subcommand, repeated options and value rules.
+
+@Test
+function emptyCommandLineScans() {
+    let parsed = match routedAudit([]) {
+        Ok(value) -> value
+        Error(message) -> ParsedArguments { command: message, values: [], remainder: [] }
+    }
+    expect!(parsed.command == "scan")
+    expect!(parse_ScanArguments(parsed).maxDepth == 2)
+}
+
+@Test
+function scanAliasesAndRepeatedExcludes() {
+    let parsed = match routedAudit(["s", "-e", "build", "--ignore", "target", "-H"]) {
+        Ok(value) -> value
+        Error(message) -> ParsedArguments { command: message, values: [], remainder: [] }
+    }
+    let scan = parse_ScanArguments(parsed)
+    expect!(scan.exclude.count == 2)
+    expect!(scan.includeHidden)
+}
+
+@Test
+function maxDepthRefusesAFraction() {
+    let outcome = match routedAudit(["scan", "--max-depth", "1.5"]) {
+        Ok(value) -> "ok"
+        Error(message) -> message
+    }
+    expect!(outcome == "invalid value for argument: maxDepth")
+}
+
+@Test
+function formatOutsideItsChoicesIsRefused() {
+    let outcome = match routedAudit(["check", "--format", "xml"]) {
+        Ok(value) -> "ok"
+        Error(message) -> message
+    }
+    expect!(outcome == "invalid value for argument: format")
+}
+
+@Test
+function explainTakesItsPathAndLineCount() {
+    let parsed = match routedAudit(["why", "src/main.kira", "-n", "3", "-r"]) {
+        Ok(value) -> value
+        Error(message) -> ParsedArguments { command: message, values: [], remainder: [] }
+    }
+    let explain = parse_ExplainArguments(parsed)
+    expect!(parsed.command == "explain")
+    expect!(explain.path == "src/main.kira")
+    expect!(explain.lines == 3)
+    expect!(explain.raw)
+}

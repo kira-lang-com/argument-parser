@@ -1,0 +1,74 @@
+import Foundation
+import ArgumentParser
+
+// The command line the example accepts: subcommands, their aliases, the default
+// subcommand, and the value rules of each option.
+
+@Test
+function noSubcommandRunsBuild() {
+    let parsed = match routed([]) {
+        Ok(value) -> value
+        Error(message) -> ParsedArguments { command: message, values: [], remainder: [] }
+    }
+    expect!(parsed.command == "build")
+}
+
+@Test
+function subcommandAliasSelectsItsCommand() {
+    let parsed = match routed(["c", "--strict"]) {
+        Ok(value) -> value
+        Error(message) -> ParsedArguments { command: message, values: [], remainder: [] }
+    }
+    expect!(parsed.command == "check")
+    expect!(parse_CheckArguments(parsed).strict)
+}
+
+@Test
+function buildOptionsReadTheirValues() {
+    let parsed = match routed(["b", "--jobs", "8", "--profile", "release"]) {
+        Ok(value) -> value
+        Error(message) -> ParsedArguments { command: message, values: [], remainder: [] }
+    }
+    let build = parse_BuildArguments(parsed)
+    expect!(build.jobs == 8)
+    expect!(build.profile == "release")
+    expect!(build.target == "host")
+    expect!(build.frames == 6)
+}
+
+@Test
+function repeatedFeatureOptionKeepsEveryValue() {
+    let parsed = match routed(["build", "-F", "alpha", "--features", "beta"]) {
+        Ok(value) -> value
+        Error(message) -> ParsedArguments { command: message, values: [], remainder: [] }
+    }
+    let build = parse_BuildArguments(parsed)
+    expect!(build.feature.count == 2)
+}
+
+@Test
+function profileOutsideItsChoicesIsRefused() {
+    let outcome = match routed(["build", "--profile", "fast"]) {
+        Ok(value) -> "ok"
+        Error(message) -> message
+    }
+    expect!(outcome == "invalid value for argument: profile")
+}
+
+@Test
+function wholeOptionRefusesAFraction() {
+    let outcome = match routed(["build", "--frames", "2.5"]) {
+        Ok(value) -> "ok"
+        Error(message) -> message
+    }
+    expect!(outcome == "invalid value for argument: frames")
+}
+
+@Test
+function unknownSubcommandIsRefused() {
+    let outcome = match routed(["deploy"]) {
+        Ok(value) -> "ok"
+        Error(message) -> message
+    }
+    expect!(outcome == "unknown command: deploy")
+}

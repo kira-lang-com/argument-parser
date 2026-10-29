@@ -1,0 +1,36 @@
+import Foundation
+
+// A scan over the checked-in fixture tree, which holds three entries that are
+// not dot-prefixed and one that is: `.hidden/c.fixture`.
+
+@Test
+function scanSkipsHiddenEntriesByDefault() {
+    let rules = ScanRules { maxDepth: 5, includeHidden: false, excluded: [] }
+    let summary = match scanned("tests/fixtures/tree", 0, rules) {
+        Ok(found) -> found
+        Error(failure) -> ScanSummary { bytes: -1 }
+    }
+    expect!(summary.files == 3)
+    expect!(summary.directories == 2)
+}
+
+@Test
+function scanStopsAtTheDepthLimit() {
+    let rules = ScanRules { maxDepth: 0, includeHidden: false, excluded: [] }
+    let summary = match scanned("tests/fixtures/tree", 0, rules) {
+        Ok(found) -> found
+        Error(failure) -> ScanSummary { bytes: -1 }
+    }
+    expect!(summary.files == 0)
+    expect!(summary.directories == 1)
+}
+
+@Test
+function scanIncludesHiddenWhenAsked() {
+    let rules = ScanRules { maxDepth: 5, includeHidden: true, excluded: [] }
+    let summary = match scanned("tests/fixtures/tree", 0, rules) {
+        Ok(found) -> found
+        Error(failure) -> ScanSummary { bytes: -1 }
+    }
+    expect!(summary.files == 4)
+}

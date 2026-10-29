@@ -1,0 +1,134 @@
+import Foundation
+
+// Options, flags and positionals: the spellings a command line may use, the
+// values they take, and the error each misuse gives.
+
+@Test
+function longOptionTakesTheNextToken() {
+    let arguments = [option("output", "Where to write")]
+    let parsed = parsedFor(arguments, ["--output", "a.txt"])
+    expect!(parsed.requiredText("output") == "a.txt")
+    expect!(parsed.wasProvided("output"))
+}
+
+@Test
+function equalsSpellingTakesTheRestAfterTheFirstEquals() {
+    let arguments = [option("output", "Where to write")]
+    let parsed = parsedFor(arguments, ["--output=a=b"])
+    expect!(parsed.requiredText("output") == "a=b")
+}
+
+@Test
+function shortFlagsCombineInOneToken() {
+    let arguments = [flag("alpha", "First").short("a"), flag("beta", "Second").short("b")]
+    let parsed = parsedFor(arguments, ["-ab"])
+    expect!(parsed.flag("alpha"))
+    expect!(parsed.flag("beta"))
+}
+
+@Test
+function shortOptionTakesTheRestOfItsToken() {
+    let arguments = [option("level", "Level").short("l")]
+    expect!(parsedFor(arguments, ["-l5"]).requiredText("level") == "5")
+    expect!(parsedFor(arguments, ["-l=7"]).requiredText("level") == "7")
+    expect!(parsedFor(arguments, ["-l", "9"]).requiredText("level") == "9")
+}
+
+@Test
+function unknownOptionIsReported() {
+    let arguments = [flag("verbose", "Print more")]
+    expect!(outcomeText(arguments, ["--verbos"]) == "unknown option: --verbos")
+    expect!(outcomeText(arguments, ["-x"]) == "unknown option: -x")
+}
+
+@Test
+function optionLeftWithoutAValueIsReported() {
+    let arguments = [option("output", "Where to write")]
+    expect!(outcomeText(arguments, ["--output"]) == "missing value for --output")
+}
+
+@Test
+function flagGivenAValueIsReported() {
+    let arguments = [flag("verbose", "Print more")]
+    expect!(outcomeText(arguments, ["--verbose=yes"]) == "flag does not accept a value: --verbose")
+}
+
+@Test
+function flagAcceptsNoValueWhenGivenAlone() {
+    let arguments = [flag("verbose", "Print more")]
+    expect!(parsedFor(arguments, ["--verbose"]).flag("verbose"))
+    expect!(!parsedFor(arguments, []).flag("verbose"))
+}
+
+@Test
+function nonRepeatingOptionGivenTwiceIsReported() {
+    let arguments = [option("output", "Where to write")]
+    expect!(
+        outcomeText(
+            arguments,
+            ["--output", "a", "--output", "b"]
+        ) == "argument may only be provided once: output"
+    )
+}
+
+@Test
+function repeatingOptionKeepsEveryValueInOrder() {
+    let arguments = [option("feature", "A feature").repeating()]
+    let parsed = parsedFor(arguments, ["--feature", "a", "--feature", "b"])
+    expect!(parsed.texts("feature") == ["a", "b"])
+}
+
+@Test
+function choicesRestrictTheValue() {
+    let arguments = [option("mode", "The mode").oneOf(["fast", "slow"])]
+    expect!(parsedFor(arguments, ["--mode", "fast"]).requiredText("mode") == "fast")
+    expect!(outcomeText(arguments, ["--mode", "medium"]) == "invalid value for argument: mode")
+}
+
+@Test
+function wholeNumberRejectsAFraction() {
+    let arguments = [option("jobs", "Parallel jobs").whole()]
+    expect!(parsedFor(arguments, ["--jobs", "4"]).requiredNumber("jobs") == 4)
+    expect!(outcomeText(arguments, ["--jobs", "2.5"]) == "invalid value for argument: jobs")
+}
+
+@Test
+function numberReadsAFraction() {
+    let arguments = [option("ratio", "A ratio").number()]
+    expect!(parsedFor(arguments, ["--ratio", "2.5"]).requiredNumber("ratio") == 2.5)
+    expect!(outcomeText(arguments, ["--ratio", "two"]) == "invalid value for argument: ratio")
+}
+
+@Test
+function omittedOptionTakesItsDefault() {
+    let arguments = [option("level", "Level").whole().defaulting("3")]
+    let parsed = parsedFor(arguments, [])
+    expect!(parsed.requiredNumber("level") == 3)
+    expect!(!parsed.wasProvided("level"))
+}
+
+@Test
+function omittedRequiredPositionalIsReported() {
+    let arguments = [argument("path", "The input")]
+    expect!(outcomeText(arguments, []) == "missing required argument: path")
+}
+
+@Test
+function positionalsFillInDeclarationOrder() {
+    let arguments = [argument("source", "From"), argument("target", "To")]
+    let parsed = parsedFor(arguments, ["x", "y"])
+    expect!(parsed.requiredText("source") == "x")
+    expect!(parsed.requiredText("target") == "y")
+}
+
+@Test
+function extraOperandIsReportedWithoutARemainder() {
+    let arguments = [argument("source", "From")]
+    expect!(outcomeText(arguments, ["x", "y"]) == "unexpected argument: y")
+}
+
+@Test
+function loneDashIsAnOperand() {
+    let arguments = [argument("path", "The input")]
+    expect!(parsedFor(arguments, ["-"]).requiredText("path") == "-")
+}

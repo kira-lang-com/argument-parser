@@ -1,0 +1,25 @@
+import Foundation
+import ArgumentParser
+
+// The command router the example builds in `main`, and the outcome of a parse
+// reported as text.
+
+function exampleRouter() -> CommandRouter {
+    let root = RootCommand()
+    let build = BuildCommand()
+    let check = CheckCommand()
+    let metadata = MetadataCommand()
+    return CommandRouter {
+        root: commandOf(root),
+        commands: [commandOf(build), commandOf(check), commandOf(metadata)]
+    }
+}
+
+// The parsed command line, or the error message when it does not parse.
+function routed(tokens: borrow [String]) -> Result<ParsedArguments, String> {
+    let router = exampleRouter()
+    match router.parse(tokens) {
+        Ok(parsed) -> return .Ok(parsed)
+        Error(error) -> return .Error(error.description())
+    }
+}

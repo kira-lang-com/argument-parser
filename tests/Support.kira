@@ -1,0 +1,40 @@
+import Foundation
+
+// Helpers shared by the tests: a command named `tool` built from a list of
+// arguments, and parses that report their outcome as text.
+
+// A command named `tool` with the given arguments and no subcommands.
+function toolSchema(arguments: borrow [ArgumentSpec]) -> Command {
+    return Command {
+        configuration: CommandConfiguration { name: "tool", abstract: "A test tool" },
+        arguments: copy arguments
+    }
+}
+
+// Parses `tokens` against a `tool` with `arguments`.
+function parseTool(
+    arguments: borrow [ArgumentSpec],
+    tokens: borrow [String]
+) -> Result<ParsedArguments, ArgumentError> {
+    return Parser { command: toolSchema(arguments) }.parse(tokens)
+}
+
+// The parse's outcome as text: "ok", or the message of the error it gave.
+function outcomeText(arguments: borrow [ArgumentSpec], tokens: borrow [String]) -> String {
+    match parseTool(arguments, tokens) {
+        Ok(parsed) -> return "ok"
+        Error(error) -> return error.description()
+    }
+}
+
+// The parsed arguments of a command line that must parse. A failed parse
+// stops the test with the error's message.
+function parsedFor(arguments: borrow [ArgumentSpec], tokens: borrow [String]) -> ParsedArguments {
+    match parseTool(arguments, tokens) {
+        Ok(parsed) -> return parsed
+        Error(error) -> {
+            printError("expected the command line to parse: \(error.description())")
+            runtimeTrap()
+        }
+    }
+}

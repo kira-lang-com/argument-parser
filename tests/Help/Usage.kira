@@ -1,0 +1,40 @@
+import Foundation
+
+// The help a command shows: its usage line and its option list, both built from
+// the same schema the parser reads.
+
+@Test
+function usageLineShowsEachArgumentAsItIsRequired() {
+    let command = Command {
+        configuration: CommandConfiguration { name: "tool" },
+        arguments: [
+            argument("path", "The input"),
+            option("output", "Where to write"),
+            flag("verbose", "Print more").short("v")
+        ]
+    }
+    expect!(helpText(command).startsWith("USAGE: tool <path> [--output <VALUE>] [--verbose]"))
+}
+
+@Test
+function optionListShowsShortAndLongSpellings() {
+    let command = toolSchema([flag("verbose", "Print more").short("v")])
+    expect!(helpText(command).contains("  -v, --verbose  Print more"))
+}
+
+@Test
+function choicesAreListedBesideTheHelp() {
+    let command = toolSchema([option("mode", "The mode").oneOf(["fast", "slow"])])
+    expect!(helpText(command).contains("  --mode <VALUE>  The mode (fast | slow)"))
+}
+
+@Test
+function helpNamesTheVersionOnlyWhenThereIsOne() {
+    let plain = toolSchema([])
+    expect!(!helpText(plain).contains("--version"))
+    let versioned = Command {
+        configuration: CommandConfiguration { name: "tool", version: .Some("1.2") },
+        arguments: []
+    }
+    expect!(helpText(versioned).contains("-V, --version  Show version"))
+}

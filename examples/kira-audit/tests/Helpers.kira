@@ -1,0 +1,23 @@
+import Foundation
+import ArgumentParser
+
+// The command router `main` builds, and a parse outcome reported as text.
+
+function auditRouter() -> CommandRouter {
+    let root = RootCommand()
+    let scan = ScanCommand()
+    let check = CheckCommand()
+    let explain = ExplainCommand()
+    return CommandRouter {
+        root: commandOf(root),
+        commands: [commandOf(scan), commandOf(check), commandOf(explain)]
+    }
+}
+
+function routedAudit(tokens: borrow [String]) -> Result<ParsedArguments, String> {
+    let router = auditRouter()
+    match router.parse(tokens) {
+        Ok(parsed) -> return .Ok(parsed)
+        Error(error) -> return .Error(error.description())
+    }
+}

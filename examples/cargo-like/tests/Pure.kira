@@ -1,0 +1,93 @@
+import Foundation
+
+// The helpers that do the example's work without touching the filesystem.
+
+@Test
+function outputFormatReadsJsonAndDefaultsToText() {
+    let json = match outputFormat("json") {
+        Json -> true
+        Text -> false
+    }
+    let text = match outputFormat("text") {
+        Json -> false
+        Text -> true
+    }
+    expect!(json)
+    expect!(text)
+}
+
+@Test
+function joinPathPlacesOneSeparatorBetweenParts() {
+    expect!(joinPath("a/", "b") == "a/b")
+    expect!(joinPath("a", "b") == "a/b")
+    expect!(joinPath("", "b") == "b")
+}
+
+@Test
+function manifestNeedsAKindAndAStrictOneAVersion() {
+    let loose = "construct P extends Package { let kind: PackageKind = .App }"
+    expect!(manifestIsValid(loose, false))
+    expect!(!manifestIsValid(loose, true))
+    expect!(!manifestIsValid("construct P extends Package { let version: String = \"1\" }", false))
+}
+
+@Test
+function featureTextListsFeaturesOrSaysDefault() {
+    expect!(featureText([]) == "default")
+    expect!(featureText(["alpha", "beta"]) == "alpha,beta")
+}
+
+@Test
+function unitTextCyclesThroughTheUnits() {
+    let units = ["core", "ui"]
+    expect!(unitText(units, 0) == "core")
+    expect!(unitText(units, 1) == "ui")
+    expect!(unitText(units, 2) == "core")
+    expect!(unitText([], 3) == "workspace")
+}
+
+@Test
+function progressBarIsFixedWidthAndClamped() {
+    expect!(progressBar(50).contains("] 50%"))
+    expect!(progressBar(150).endsWith("] 100%"))
+    expect!(progressBar(-3).endsWith("] 0%"))
+    expect!(progressBar(0).startsWith("[ "))
+    expect!(progressBar(100).startsWith("[="))
+}
+
+@Test
+function projectSummariesAddFieldByField() {
+    let first = ProjectSummary { files: 2, kiraFiles: 1, bytes: 10 }
+    let second = ProjectSummary { files: 3, kiraFiles: 4, bytes: 5 }
+    let total = first.adding(second)
+    expect!(total.files == 5)
+    expect!(total.kiraFiles == 5)
+    expect!(total.bytes == 15)
+}
+
+@Test
+function summaryJsonNamesEveryField() {
+    let members = json(ProjectSummary { files: 7 })
+    expect!(members.count == 5)
+    expect!(members[1].name == "files")
+}
+
+@Test
+function finalFrameReportsTheBuildFinished() {
+    let build = BuildArguments {
+        path: ".",
+        profile: "dev",
+        target: "host",
+        jobs: 4,
+        feature: [],
+        unit: [],
+        locked: false,
+        plain: false,
+        noProgress: false,
+        frames: 3,
+        delay: 0
+    }
+    let lines = buildLines(build, ProjectSummary { files: 1 }, 2)
+    expect!(lines[0].contains("Finished dev profile"))
+    expect!(lines.count == 5)
+}

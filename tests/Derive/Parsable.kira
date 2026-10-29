@@ -1,0 +1,49 @@
+import Foundation
+
+// `@Derive(Parsable)` projects a parsed command line into a program's own
+// struct, field by field.
+
+@Derive(Parsable)
+struct RunOptions {
+    let path: String
+    let level: Number
+    let verbose: Bool
+    let tags: [String]
+    let output: String?
+}
+
+@Test
+function derivedFunctionFillsEveryFieldKind() {
+    let arguments = [
+        argument("path", "The input"),
+        option("level", "Level").whole().defaulting("1"),
+        flag("verbose", "Print more"),
+        option("tags", "A tag").repeating(),
+        option("output", "Where to write")
+    ]
+    let parsed = parsedFor(
+        arguments,
+        ["notes.txt", "--verbose", "--tags", "a", "--tags", "b", "--level", "4"]
+    )
+    let options = parse_RunOptions(parsed)
+    expect!(options.path == "notes.txt")
+    expect!(options.level == 4)
+    expect!(options.verbose)
+    expect!(options.tags.count == 2)
+    expect!(!options.output.isSome())
+}
+
+@Test
+function derivedFunctionUsesDefaultsWhenOmitted() {
+    let arguments = [
+        argument("path", "The input"),
+        option("level", "Level").whole().defaulting("1"),
+        flag("verbose", "Print more"),
+        option("tags", "A tag").repeating(),
+        option("output", "Where to write")
+    ]
+    let options = parse_RunOptions(parsedFor(arguments, ["notes.txt"]))
+    expect!(options.level == 1)
+    expect!(!options.verbose)
+    expect!(options.tags.count == 0)
+}

@@ -1,0 +1,213 @@
+//! Routes a command line to one of several subcommands, and runs a command as a
+//! complete program.
+//!
+//! [`CommandRouter`] chooses the schema by the first operand. [`runCommand`]
+//! and [`runCommandRouter`] wrap the router, show help, the version or an error,
+//! and return the exit status a program should use.
+
+import Foundation
+
+/// The exit statuses a command-line program returns.
+public namespace ExitStatus {
+    /// The status a program exits with when the command line was wrong.
+    ///
+    /// It is `EX_USAGE` from `sysexits.h`, which is 64.
+    let usage: Number = 64
+}
+
+/// Parses a command line that may name one of several independent subcommands.
+///
+/// `root` is the command the program is run as. Each entry of `commands` is a
+/// subcommand with its own argument model. A command line whose first operand
+/// names a subcommand is parsed against that subcommand's schema.
+///
+/// # Examples
+///
+/// ```kira
+/// let router = CommandRouter {
+///     root: Command { configuration: CommandConfiguration { name: "tool" }, arguments: [] },
+///     commands: [Command {
+///         configuration: CommandConfiguration { name: "build", abstract: "Build the project" },
+///         arguments: []
+///     }]
+/// }
+/// let parsed = router.parse(["build"])
+/// ```
+public struct CommandRouter {
+    /// The command whose schema parses a command line that names no subcommand.
+    let root: Command
+    /// The subcommands, each with its own schema. Empty for a single-command program.
+    let commands: [Command] = []
+
+    /// Returns the subcommand that `spelling` names, by its name or an alias, or `.None`.
+    function command(borrow self, spelling: borrow String) -> Command? {
+        for command in self.commands {
+            if command.configuration.isNamed(spelling) { return .Some(command) }
+        }
+        return .None
+    }
+
+    /// Parses `tokens` against the subcommand they name, or against the root command.
+    ///
+    /// # Errors
+    ///
+    /// - `.UnknownCommand` when the first operand is not a subcommand, and the router has subcommands.
+    /// - Every error a [`Parser`] gives for the schema that was chosen, such as a missing or invalid argument.
+    function parse(borrow self, tokens: borrow [String]) -> Result<ParsedArguments, ArgumentError> {
+        let rootParser = Parser { command: self.root }
+        if tokens.count == 0 {
+            match self.root.configuration.defaultSubcommand {
+                Some(name) -> {
+                    match self.command(name) {
+                        Some(child) -> return Parser { command: child }.parse([])
+                        None -> return rootParser.parse(tokens)
+                    }
+                }
+                None -> return rootParser.parse(tokens)
+            }
+        }
+        let first = tokens[0]
+        if !isOperand(first) || first == "-" { return rootParser.parse(tokens) }
+        match self.command(first) {
+            Some(child) -> {
+                var rest: [String] = []
+                for index in 1..tokens.count { rest.append(tokens[index]) }
+                return Parser { command: child }.parse(rest)
+            }
+            None -> {
+                if self.commands.count > 0 || self.root.configuration.subcommands.count > 0 {
+                    return .Error(.UnknownCommand(first))
+                }
+                return rootParser.parse(tokens)
+            }
+        }
+    }
+
+    /// Returns the help for the whole router: the root's help, then one line for each subcommand.
+    function help(borrow self) -> String {
+        var text = helpText(self.root)
+        if self.commands.count == 0 { return text }
+        text += "\n\nCOMMAND DETAILS:"
+        for command in self.commands {
+            let configuration = command.configuration
+            text += "\n  " + configuration.name
+            if configuration.aliases.count > 0 {
+                text += " (" + joined(configuration.aliases, " | ") + ")"
+            }
+            if !configuration.abstract.isEmpty() { text += "  " + configuration.abstract }
+        }
+        return text
+    }
+
+    /// Returns the help of the command the first token names, or the router's help when it names none.
+    function helpFor(borrow self, tokens: borrow [String]) -> String {
+        if tokens.count == 0 { return self.help() }
+        match self.command(tokens[0]) {
+            Some(child) -> return helpText(child)
+            None -> return self.help()
+        }
+    }
+
+    /// Returns the version text of the root command.
+    function version(borrow self) -> String {
+        return Parser { command: self.root }.version()
+    }
+
+    /// Shows what a failed parse calls for.
+    ///
+    /// A help or version request goes to standard output. Any other error goes
+    /// to standard error, followed by the usage of the command the tokens name.
+    function explain(borrow self, error: borrow ArgumentError, tokens: borrow [String]) {
+        match error {
+            HelpRequested -> print(self.helpFor(tokens))
+            VersionRequested -> print(self.version())
+            UnknownOption, UnknownCommand, MissingValue, UnexpectedValue, MissingArgument, InvalidValue, DuplicateArgument, UnexpectedArgument -> {
+                printError("\(self.root.configuration.name): \(error.description())")
+                printError(self.helpFor(tokens))
+            }
+        }
+    }
+}
+
+/// Returns the arguments the process was started with, without the program's own path.
+///
+/// # Examples
+///
+/// ```kira
+/// let arguments = commandLineArguments()
+/// ```
+public function commandLineArguments() -> [String] {
+    var arguments: [String] = []
+    for index in 0..processArgumentCount() {
+        match processArgument(index) {
+            Some(argument) -> arguments.append(argument)
+            // The count was read first; nothing is past where it stopped.
+            None -> break
+        }
+    }
+    return arguments
+}
+
+/// Runs a [`ParsableCommand`] as a complete command-line program.
+///
+/// It parses `tokens`, shows help or the version when asked, or runs the
+/// command's body with the validated arguments.
+///
+/// # Returns
+///
+/// The exit status: what `run` returns, `0` after help or version, or
+/// `ExitStatus.usage` after an error.
+///
+/// # Examples
+///
+/// ```kira
+/// let status = runCommand(EmptyCommand(), commandLineArguments())
+/// ```
+public function runCommand(command: borrow Any ParsableCommand, tokens: borrow [String]) -> Number {
+    let router = CommandRouter { root: commandOf(command) }
+    match router.parse(tokens) {
+        Ok(parsed) -> return command.run(parsed)
+        Error(error) -> return explained(router, error, tokens)
+    }
+}
+
+/// Runs a root command with subcommands as a complete command-line program.
+///
+/// Each child is a [`ParsableCommand`] with its own schema. The first operand
+/// selects the child, and that child's body runs with its own validated
+/// arguments. A command line that names no child runs `root`.
+///
+/// # Returns
+///
+/// The exit status, as [`runCommand`] gives it.
+public function runCommandRouter(
+    root: borrow Any ParsableCommand,
+    children: borrow [Any ParsableCommand],
+    tokens: borrow [String]
+) -> Number {
+    var commands: [Command] = []
+    for child in children { commands.append(commandOf(child)) }
+    let router = CommandRouter { root: commandOf(root), commands: commands }
+    match router.parse(tokens) {
+        Ok(parsed) -> {
+            for child in children {
+                if child.configuration.isNamed(parsed.command) { return child.run(parsed) }
+            }
+            return root.run(parsed)
+        }
+        Error(error) -> return explained(router, error, tokens)
+    }
+}
+
+/// Explains a failed parse, and returns the exit status it calls for.
+///
+/// Help and version exit with `0`, and every other error with
+/// `ExitStatus.usage`.
+function explained(
+    router: borrow CommandRouter,
+    error: borrow ArgumentError,
+    tokens: borrow [String]
+) -> Number {
+    router.explain(error, tokens)
+    return error.isCleanExit() ? 0 : ExitStatus.usage
+}

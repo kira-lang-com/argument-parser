@@ -1,0 +1,287 @@
+//! The schema of a command-line tool: its commands, their arguments, options
+//! and flags, and the `ParsableCommand` construct a program implements.
+//!
+//! The vocabulary follows Swift ArgumentParser. A command has a
+//! [`CommandConfiguration`] and a list of [`ArgumentSpec`]s. Parsing and help
+//! are both generated from that schema, so validation and the usage text never
+//! disagree. The schema itself holds no parsing logic; see `Parser.kira`.
+
+import Foundation
+
+/// What an argument's value reads as, and so how it is checked.
+public enum ValueKind {
+    /// Any text. The value is kept as given.
+    Text
+    /// A number with no fractional part, such as a count or a number of seconds.
+    ///
+    /// A value with a fraction is rejected.
+    Whole
+    /// Any number, fractional or not, read as a `Number`.
+    Number
+    /// `true` or `false`. A flag is always of this kind.
+    Boolean
+}
+
+/// Where an argument sits on the command line.
+public enum ArgumentKind {
+    /// An operand, given by its place among the other operands.
+    Positional
+    /// A named argument that takes a value, `--name VALUE` or `--name=VALUE`.
+    Option
+    /// A named argument that is either given or not, such as `--verbose`.
+    Flag
+}
+
+/// One field in a command's schema.
+///
+/// [`argument`], [`option`] and [`flag`] start one. Each modifier answers a
+/// copy with one more property set, so a declaration reads like Swift's
+/// `@Argument`, `@Option` and `@Flag`.
+///
+/// # Examples
+///
+/// ```kira
+/// let threshold = option("threshold", "The level to stop at").whole().defaulting("10")
+/// ```
+public struct ArgumentSpec {
+    /// The argument's name. A long option is spelled `--name`, and the parsed value is found by it.
+    var name: String
+    /// Whether the argument is positional, an option or a flag.
+    var kind: ArgumentKind
+    /// What the value reads as. A flag is `Boolean`.
+    var value: ValueKind = .Text
+    /// The one-letter spelling, without the dash, or `.None`.
+    var shortName: String? = .None
+    /// Other long spellings of the argument, each accepted as the name is.
+    var aliases: [String] = []
+    /// What the value is called in help, such as `NUMBER`.
+    var valueName: String = "VALUE"
+    /// The description shown in help. Empty when none was given.
+    var help: String = ""
+    /// The only values accepted. Empty means any value of `value`'s kind.
+    var choices: [String] = []
+    /// Whether the command line must give the argument. A required argument has no default.
+    var isRequired: Bool = false
+    /// Whether the option may be given more than once, each value kept.
+    var isRepeated: Bool = false
+    /// The text parsed as though it had been given when the command line does not give the argument, or `.None`.
+    var defaultText: String? = .None
+
+    /// Returns a copy with the one-letter spelling set, so `short("t")` accepts `-t`.
+    function short(borrow self, letter: String) -> ArgumentSpec {
+        var spec = self
+        spec.shortName = .Some(letter)
+        return spec
+    }
+
+    /// Returns a copy that also accepts each of `names` as a long spelling.
+    ///
+    /// Each alias is accepted exactly as the name is.
+    function aliased(borrow self, names: [String]) -> ArgumentSpec {
+        var spec = self
+        spec.aliases = names
+        return spec
+    }
+
+    /// Returns a copy whose value is a whole number. Its help name becomes `NUMBER`.
+    function whole(borrow self) -> ArgumentSpec {
+        var spec = self
+        spec.value = .Whole
+        spec.valueName = "NUMBER"
+        return spec
+    }
+
+    /// Returns a copy whose value is a number, fractional or not. Its help name becomes `NUMBER`.
+    function number(borrow self) -> ArgumentSpec {
+        var spec = self
+        spec.value = .Number
+        spec.valueName = "NUMBER"
+        return spec
+    }
+
+    /// Returns a copy that accepts only `values`. Any other text is an invalid value.
+    function oneOf(borrow self, values: [String]) -> ArgumentSpec {
+        var spec = self
+        spec.choices = values
+        return spec
+    }
+
+    /// Returns a copy whose help name is `text`, so `placeholder("SECONDS")` shows `<SECONDS>`.
+    function placeholder(borrow self, text: String) -> ArgumentSpec {
+        var spec = self
+        spec.valueName = text
+        return spec
+    }
+
+    /// Returns a copy that parses `text` when the command line gives no value.
+    ///
+    /// The argument is no longer required.
+    function defaulting(borrow self, text: String) -> ArgumentSpec {
+        var spec = self
+        spec.defaultText = .Some(text)
+        spec.isRequired = false
+        return spec
+    }
+
+    /// Returns a copy the command line must give. A required argument left out is an error.
+    function required(borrow self) -> ArgumentSpec {
+        var spec = self
+        spec.isRequired = true
+        return spec
+    }
+
+    /// Returns a copy that may be left out. A positional left out is then not an error.
+    function optional(borrow self) -> ArgumentSpec {
+        var spec = self
+        spec.isRequired = false
+        return spec
+    }
+
+    /// Returns a copy that may be given more than once. Every value is kept, in command-line order.
+    function repeating(borrow self) -> ArgumentSpec {
+        var spec = self
+        spec.isRepeated = true
+        return spec
+    }
+
+    /// Whether `spelling` is this argument's long name or one of its aliases.
+    function isNamed(borrow self, spelling: borrow String) -> Bool {
+        return self.name == spelling || self.aliases.contains(spelling)
+    }
+
+    /// Whether `letter` is this argument's one-letter spelling.
+    function isShort(borrow self, letter: borrow String) -> Bool {
+        match self.shortName {
+            Some(short) -> return short == letter
+            None -> return false
+        }
+    }
+}
+
+/// A positional argument the command line must give.
+///
+/// # Examples
+///
+/// ```kira
+/// let source = argument("source", "The file to read")
+/// ```
+public function argument(name: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec { name: name, kind: .Positional, help: help, isRequired: true }
+}
+
+/// An option that takes a value, `--name VALUE` or `--name=VALUE`.
+///
+/// # Examples
+///
+/// ```kira
+/// let output = option("output", "Where to write the result").placeholder("PATH")
+/// ```
+public function option(name: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec { name: name, kind: .Option, help: help }
+}
+
+/// A flag, which is true when given and false when not.
+///
+/// # Examples
+///
+/// ```kira
+/// let verbose = flag("verbose", "Print more detail").short("v")
+/// ```
+public function flag(name: String, help: String) -> ArgumentSpec {
+    return ArgumentSpec { name: name, kind: .Flag, value: .Boolean, valueName: "", help: help }
+}
+
+/// The name, help text and subcommands of a command.
+public struct CommandConfiguration {
+    /// The command's name, as the usage line and the parser know it.
+    let name: String
+    /// Other names the command answers to as a subcommand.
+    let aliases: [String] = []
+    /// The one-line summary shown next to the name in help. Empty when none.
+    let abstract: String = ""
+    /// Longer help text, shown after the options. Empty when none.
+    let discussion: String = ""
+    /// The version text that `-V` and `--version` show, or `.None` when the command has none.
+    let version: String? = .None
+    /// The names of the subcommands the help lists. Empty when the command has none.
+    let subcommands: [String] = []
+    /// The subcommand run when no operand is given, or `.None` to run the command itself.
+    let defaultSubcommand: String? = .None
+    /// Whether the first operand no argument takes, and everything after it, is kept as the remainder.
+    ///
+    /// Lets `caffeinate -i make` pass `make` on.
+    let allowsRemainder: Bool = false
+
+    /// Whether `spelling` is this command's name or one of its aliases.
+    function isNamed(borrow self, spelling: borrow String) -> Bool {
+        return self.name == spelling || self.aliases.contains(spelling)
+    }
+}
+
+/// A command's schema: its configuration and its arguments.
+///
+/// Parsing and help are both generated from it.
+public struct Command {
+    /// The command's name, help and subcommands.
+    let configuration: CommandConfiguration
+    /// The arguments in declaration order. Positionals fill in this order.
+    let arguments: [ArgumentSpec]
+}
+
+/// A command with its own schema and body, for larger applications.
+///
+/// A conforming command provides its configuration and arguments, and a body,
+/// `run`, that receives the validated arguments and returns the process's exit
+/// status. A plain [`Command`] value is enough for data-only commands and tests.
+///
+/// # Examples
+///
+/// ```kira
+/// ParsableCommand Greet {
+///     let configuration: CommandConfiguration {
+///         return CommandConfiguration { name: "greet", abstract: "Say hello" }
+///     }
+///     let arguments: [ArgumentSpec] {
+///         return [argument("name", "Who to greet")]
+///     }
+///     function run(arguments: borrow ParsedArguments) -> Number {
+///         return 0
+///     }
+/// }
+///
+/// @Main
+/// function main() -> Number {
+///     return runCommand(Greet(), ["Ada"])
+/// }
+/// ```
+public construct ParsableCommand {
+    /// The command's name, help and subcommands.
+    @Required let configuration: CommandConfiguration
+    /// The arguments the command takes, in declaration order.
+    @Required let arguments: [ArgumentSpec]
+    /// Runs the command with its validated arguments, and returns the exit status.
+    @Required function run(arguments: borrow ParsedArguments) -> Number
+}
+
+/// A command that does nothing and exits with status zero.
+///
+/// It keeps the construct family materialized in a library-only build, and
+/// it is a valid no-op for hosts that assemble a router incrementally.
+ParsableCommand EmptyCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration { name: "empty", abstract: "A no-op command" }
+    }
+
+    let arguments: [ArgumentSpec] {
+        return []
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Number {
+        return 0
+    }
+}
+
+/// The schema of a [`ParsableCommand`], as the plain [`Command`] the parser reads.
+public function commandOf(command: borrow Any ParsableCommand) -> Command {
+    return Command { configuration: command.configuration, arguments: command.arguments }
+}

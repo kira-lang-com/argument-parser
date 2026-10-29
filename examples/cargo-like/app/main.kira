@@ -1,0 +1,498 @@
+//! A cargo-shaped build coordinator built on the ArgumentParser library.
+//!
+//! The `build` command has enough moving parts to serve as a reference: typed
+//! options, repeated values, aliases, a default subcommand, filesystem work, and an
+//! ANSI progress renderer that rewrites five lines in place. The `check` and
+//! `metadata` commands read a project directory and report on it.
+//!
+//! Run it as `kira-build` (or `kb`). With no subcommand it runs `build`.
+import Foundation
+import ArgumentParser
+
+/// The validated options of the `build` command, read from its parsed arguments.
+@Derive(Parsable)
+struct BuildArguments {
+    let path: String
+    let profile: String
+    let target: String
+    let jobs: Number
+    let feature: [String]
+    let unit: [String]
+    let locked: Bool
+    let plain: Bool
+    let noProgress: Bool
+    let frames: Number
+    let delay: Number
+}
+
+/// The validated options of the `check` command.
+@Derive(Parsable)
+struct CheckArguments {
+    let path: String
+    let format: String
+    let strict: Bool
+}
+
+/// The validated options of the `metadata` command.
+@Derive(Parsable)
+struct MetadataArguments {
+    let path: String
+    let format: String
+    let noDeps: Bool
+}
+
+/// Exit statuses this example returns from `main`.
+namespace ExampleExit {
+    /// The command finished and printed what it was asked for.
+    let done: Number = 0
+    /// The project was read but did not pass the check.
+    let invalid: Number = 1
+    /// The command line or the project directory was wrong.
+    let usage: Number = 2
+}
+
+/// Settings for walking a project directory.
+namespace Walk {
+    // Build output and tool state, which are not the project's sources.
+    /// Directory names that are never counted: build output and tool state.
+    let ignored: [String] = [".git", ".kira-build", "target", ".kira", ".idea"]
+}
+
+/// Settings for the progress display.
+namespace Progress {
+    /// The width of the progress bar, in characters.
+    let barWidth: Number = 24
+}
+
+/// The output format a command writes.
+enum OutputFormat {
+    /// Plain lines of text.
+    Text
+    /// One JSON object.
+    Json
+}
+
+// The format a `--format` names; its choices are `text` and `json`.
+/// Returns the output format a `--format` value names.
+///
+/// Anything other than `json` is `Text`. The option itself refuses other values.
+function outputFormat(name: borrow String) -> OutputFormat {
+    match name {
+        "json" -> return .Json
+        else -> return .Text
+    }
+}
+
+/// Counts of what is under a path.
+struct ProjectSummary {
+    /// The number of directories, the path included.
+    var directories: Number = 0
+    /// The number of files.
+    var files: Number = 0
+    /// The number of files whose name ends in `.kira`.
+    var kiraFiles: Number = 0
+    /// The number of `package.kira` manifests.
+    var packageFiles: Number = 0
+    /// The total size of the files, in bytes.
+    var bytes: Number = 0
+
+    /// Returns the sum of this summary and `other`, field by field.
+    function adding(borrow self, other: borrow ProjectSummary) -> ProjectSummary {
+        return ProjectSummary {
+            directories: self.directories + other.directories,
+            files: self.files + other.files,
+            kiraFiles: self.kiraFiles + other.kiraFiles,
+            packageFiles: self.packageFiles + other.packageFiles,
+            bytes: self.bytes + other.bytes,
+        }
+    }
+}
+
+/// Returns `name` placed under `base`, with one separator between them.
+///
+/// An empty `base` returns `name` alone.
+function joinPath(base: borrow String, name: borrow String) -> String {
+    if base.isEmpty() { return name }
+    if base.endsWith("/") || base.endsWith("\\") { return base + name }
+    return "\(base)/\(name)"
+}
+
+// What is under `path`: its directories, files, Kira sources, manifests and
+// bytes.
+/// Returns what is under `path`: its directories, files, Kira sources, manifests and bytes.
+///
+/// Ignored directories (see `Walk.ignored`) are skipped. A path that is neither a file nor a directory has an empty summary.
+///
+/// # Errors
+///
+/// Returns the failure of the first file or directory that cannot be read.
+function summarized(path: borrow String) -> Result<ProjectSummary, FileFailure> {
+    if fileExists(path) {
+        let size = match fileSize(path) {
+            Ok(bytes) -> bytes
+            Error(failure) -> return .Error(failure)
+        }
+        return .Ok(
+            ProjectSummary {
+                files: 1,
+                kiraFiles: path.endsWith(".kira") ? 1 : 0,
+                packageFiles: path.endsWith("package.kira") ? 1 : 0,
+                bytes: size,
+            }
+        )
+    }
+    if !isDirectory(path) { return .Ok(ProjectSummary {}) }
+    let listing = match listDirectory(path) {
+        Ok(found) -> found
+        Error(failure) -> return .Error(failure)
+    }
+    var summary = ProjectSummary { directories: 1 }
+    for name in listing.entries {
+        if Walk.ignored.contains(name) { continue }
+        match summarized(joinPath(path, name)) {
+            Ok(inner) -> summary = summary.adding(inner)
+            Error(failure) -> return .Error(failure)
+        }
+    }
+    return .Ok(summary)
+}
+
+// A manifest declares a package and its kind; a strict one its version too.
+/// Returns whether a manifest declares a package with a kind.
+///
+/// A strict check also requires a `version` member.
+function manifestIsValid(text: borrow String, strict: Bool) -> Bool {
+    if !text.contains("Package") || !text.contains("let kind") { return false }
+    return !strict || text.contains("let version")
+}
+
+/// Returns the feature list as shown in the progress lines, or `default` when there are none.
+function featureText(features: borrow [String]) -> String {
+    if features.count == 0 { return "default" }
+    var text = ""
+    for (index, feature) in features.enumerated() { text += index > 0 ? ",\(feature)" : feature }
+    return text
+}
+
+/// Returns the workspace unit shown in `frame`, cycling through `units`.
+///
+/// With no units it returns `workspace`.
+function unitText(units: borrow [String], frame: Number) -> String {
+    if units.count == 0 { return "workspace" }
+    return units[frame % units.count]
+}
+
+/// Returns a progress bar for `percent`, clamped to 0 through 100.
+function progressBar(percent: Number) -> String {
+    let bounded = percent < 0 ? 0 : (percent > 100 ? 100 : percent)
+    let filled = floor(bounded * Progress.barWidth / 100)
+    var bar = "["
+    for index in 0..Progress.barWidth { bar += index < filled ? "=" : " " }
+    return "\(bar)] \(bounded)%"
+}
+
+// The five status lines of `frame`.
+/// Returns the five status lines of progress frame `frame`.
+///
+/// The last frame reports the build as finished.
+function buildLines(
+    build: borrow BuildArguments,
+    summary: borrow ProjectSummary,
+    frame: Number
+) -> [String] {
+    if frame == build.frames - 1 {
+        return ["    Finished \(build.profile) profile", "    Checking \(build.path) (\(summary.files) files)", "    Artifacts \(joinPath(build.path, ".kira-build"))", "       Target \(build.target) | jobs \(build.jobs)", "      Sources \(summary.kiraFiles) .kira files | \(summary.bytes) bytes",]
+    }
+    let percent = floor((frame + 1) * 100 / build.frames)
+    return ["   Compiling \(summary.kiraFiles) Kira sources", "    Checking \(build.path) (\(summary.files) files)", "    Building \(progressBar(percent))", "       Profile \(build.profile) | target \(build.target) | jobs \(build.jobs)\(build.locked ? " | locked" : "")", "          Unit \(unitText(build.unit, frame)) | features \(featureText(build.feature))",]
+}
+
+// Prints `lines`, over the ones printed last when `redraw`.
+/// Prints `lines`.
+///
+/// When `redraw` is true, the lines printed last are overwritten in place with ANSI escape codes.
+function draw(lines: borrow [String], redraw: Bool) {
+    for (index, line) in lines.enumerated() {
+        if !redraw {
+            print(line)
+        } else if index == 0 {
+            print("\e[\(lines.count)A\e[2K\r\(line)")
+        } else {
+            print("\e[2K\r\(line)")
+        }
+    }
+}
+
+/// Returns the JSON members that describe `summary`.
+function json(summary: borrow ProjectSummary) -> [JsonMember] {
+    return [JsonMember { name: "directories", value: .Number(summary.directories) }, JsonMember {
+        name: "files",
+        value: .Number(summary.files)
+    }, JsonMember { name: "kiraFiles", value: .Number(summary.kiraFiles) }, JsonMember {
+        name: "packageFiles",
+        value: .Number(summary.packageFiles)
+    }, JsonMember { name: "bytes", value: .Number(summary.bytes) },]
+}
+
+// The project at `path`, its manifest and what is under it.
+/// A project directory: its path, its manifest if it has one, and its summary.
+struct Project {
+    /// The directory the project was read from.
+    let path: String
+    /// The contents of `package.kira`, or `.None` when there is none.
+    let manifest: FileContents?
+    /// What is under the project's directory.
+    let summary: ProjectSummary
+}
+
+/// Reads the project at `path`.
+///
+/// A project without a manifest is still read: each command decides whether it needs one.
+///
+/// # Errors
+///
+/// Returns a message when `path` is not a directory or cannot be read.
+function project(path: borrow String) -> Result<Project, String> {
+    if !isDirectory(path) { return .Error("project directory does not exist: \(path)") }
+    let summary = match summarized(path) {
+        Ok(found) -> found
+        Error(failure) -> return .Error("cannot read the project: \(traceText(failure))")
+    }
+    // A project without a manifest is still summarized; each command says
+    // whether it needs one.
+    var manifest: FileContents? = .None
+    match readFile(joinPath(path, "package.kira")) {
+        Ok(contents) -> manifest = .Some(contents)
+        Error(failure) -> absorb failure
+    }
+    return .Ok(Project { path: path, manifest: manifest, summary: summary })
+}
+
+/// The root command, `kira-build`. It names the subcommands and has no work of its own.
+ParsableCommand RootCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration {
+            name: "kira-build",
+            aliases: ["kb"],
+            abstract: "A cargo-like build coordinator for Kira workspaces",
+            discussion: "Inspect a package.kira project, render a live build plan, and report metadata from the shell.",
+            version: .Some("0.1.0"),
+            subcommands: ["build", "check", "metadata"],
+            defaultSubcommand: .Some("build"),
+        }
+    }
+
+    let arguments: [ArgumentSpec] {
+        return []
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Number {
+        print("kira-build: choose build, check, or metadata")
+        return ExampleExit.done
+    }
+}
+
+/// The `build` command: plans a build of a project and draws its progress.
+ParsableCommand BuildCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration {
+            name: "build",
+            aliases: ["b"],
+            abstract: "Plan a workspace build with live cargo-style progress"
+        }
+    }
+
+    let arguments: [ArgumentSpec] {
+        return [argument(name: "path", help: "Project directory").defaulting("."), option(
+            name: "profile",
+            help: "Build profile"
+        ).short("p").oneOf(["dev", "release"]).defaulting("dev"), option(
+            name: "target",
+            help: "Compilation target label"
+        ).short("t").aliased(["target-triple"]).defaulting("host"), option(
+            name: "jobs",
+            help: "Concurrent job count"
+        ).short("j").whole().defaulting("4"), option(
+            name: "feature",
+            help: "Enable a feature; may be repeated"
+        ).short("F").aliased(["features"]).repeating(), option(
+            name: "unit",
+            help: "Build one workspace unit; may be repeated"
+        ).short("u").aliased(["package"]).repeating(), flag(
+            name: "locked",
+            help: "Use the locked dependency plan"
+        ).short("l"), flag(name: "plain", help: "Print every frame without ANSI rewriting").short(
+            "P"
+        ), flag(name: "noProgress", help: "Suppress the live progress display").short("q").aliased(
+            ["no-progress"]
+        ), option(name: "frames", help: "Number of progress frames").short("n").aliased(
+            ["frame-count"]
+        ).whole().defaulting("6"), option(name: "delay", help: "Milliseconds between frames").short(
+            "d"
+        ).aliased(["delay-ms"]).whole().defaulting("120"),]
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Number {
+        let build = parse_BuildArguments(arguments)
+        if build.jobs <= 0 || build.frames <= 0 || build.delay < 0 {
+            printError(
+                "error: jobs and frames must be greater than zero, and the delay not negative"
+            )
+            return ExampleExit.usage
+        }
+        let found = match project(build.path) {
+            Ok(value) -> value
+            Error(reason) -> {
+                printError("error: \(reason)")
+                return ExampleExit.usage
+            }
+        }
+        if found.manifest.isNone() {
+            printError("error: package.kira not found in \(build.path)")
+            return ExampleExit.usage
+        }
+        let last = build.frames - 1
+        if build.noProgress {
+            draw(buildLines(build, found.summary, last), false)
+            return ExampleExit.done
+        }
+        for frame in 0..build.frames {
+            draw(buildLines(build, found.summary, frame), frame > 0 && !build.plain)
+            if frame < last && build.delay > 0 { processSleep(build.delay) }
+        }
+        return ExampleExit.done
+    }
+}
+
+/// The `check` command: validates `package.kira` and the sources under a project.
+ParsableCommand CheckCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration {
+            name: "check",
+            aliases: ["c"],
+            abstract: "Validate package.kira and source coverage"
+        }
+    }
+
+    let arguments: [ArgumentSpec] {
+        return [argument(name: "path", help: "Project directory").defaulting("."), option(
+            name: "format",
+            help: "Output format"
+        ).short("f").oneOf(["text", "json"]).defaulting("text"), flag(
+            name: "strict",
+            help: "Require a version and Kira sources"
+        ).short("S"),]
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Number {
+        let check = parse_CheckArguments(arguments)
+        let found = match project(check.path) {
+            Ok(value) -> value
+            Error(reason) -> {
+                printError("error: \(reason)")
+                return ExampleExit.usage
+            }
+        }
+        let manifestPath = joinPath(check.path, "package.kira")
+        let manifestBytes = match found.manifest {
+            Some(manifest) -> manifest.size
+            None -> 0
+        }
+        let valid = match found.manifest {
+            Some(manifest) -> manifestIsValid(manifest.text, check.strict) && (
+                !check.strict || found.summary.kiraFiles > 0
+            )
+            None -> false
+        }
+        match outputFormat(check.format) {
+            Json -> {
+                var members = [JsonMember { name: "path", value: .Text(check.path) }, JsonMember {
+                    name: "valid",
+                    value: .Boolean(valid)
+                }, JsonMember { name: "manifestBytes", value: .Number(manifestBytes) },]
+                for member in json(found.summary) { members.append(member) }
+                print(writeJson(.Object(members)))
+            }
+            Text -> {
+                if !valid {
+                    print("invalid: \(manifestPath)")
+                    print("expected a versioned Package declaration and .kira sources")
+                    return ExampleExit.invalid
+                }
+                print("valid: \(manifestPath)")
+                print("Kira sources: \(found.summary.kiraFiles)")
+                print("bytes: \(found.summary.bytes)")
+            }
+        }
+        return ExampleExit.done
+    }
+}
+
+/// The `metadata` command: reports a project's directories, files and sources.
+ParsableCommand MetadataCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration {
+            name: "metadata",
+            aliases: ["m"],
+            abstract: "Summarize a workspace like cargo metadata"
+        }
+    }
+
+    let arguments: [ArgumentSpec] {
+        return [argument(name: "path", help: "Project directory").defaulting("."), option(
+            name: "format",
+            help: "Output format"
+        ).short("f").oneOf(["text", "json"]).defaulting("text"), flag(
+            name: "noDeps",
+            help: "Omit dependency presence from the report"
+        ).short("D").aliased(["no-deps"]),]
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Number {
+        let metadata = parse_MetadataArguments(arguments)
+        let found = match project(metadata.path) {
+            Ok(value) -> value
+            Error(reason) -> {
+                printError("error: \(reason)")
+                return ExampleExit.usage
+            }
+        }
+        let manifest = match found.manifest {
+            Some(contents) -> contents
+            None -> {
+                printError("error: package.kira not found in \(metadata.path)")
+                return ExampleExit.usage
+            }
+        }
+        let hasDependencies = !metadata.noDeps && manifest.text.contains("dependencies")
+        match outputFormat(metadata.format) {
+            Json -> {
+                var members = [JsonMember { name: "package", value: .Text(metadata.path) }]
+                for member in json(found.summary) { members.append(member) }
+                members.append(
+                    JsonMember { name: "hasDependencies", value: .Boolean(hasDependencies) }
+                )
+                print(writeJson(.Object(members)))
+            }
+            Text -> {
+                print("package: \(metadata.path)")
+                print("manifest: \(manifest.size) bytes")
+                print("directories: \(found.summary.directories)")
+                print("files: \(found.summary.files)")
+                print("Kira sources: \(found.summary.kiraFiles)")
+                print("package manifests: \(found.summary.packageFiles)")
+                print("workspace bytes: \(found.summary.bytes)")
+                print(hasDependencies ? "dependencies: declared" : "dependencies: omitted or none")
+            }
+        }
+        return ExampleExit.done
+    }
+}
+
+/// The entry point. Routes the command line to its subcommand and returns the exit status.
+@Main
+function main() -> Number {
+    let root = RootCommand()
+    let children: [Any ParsableCommand] = [BuildCommand(), CheckCommand(), MetadataCommand()]
+    return runCommandRouter(root, children, commandLineArguments())
+}

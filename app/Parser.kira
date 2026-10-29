@@ -1,0 +1,470 @@
+//! Parses a command line against a [`Command`]'s schema, token by token.
+//!
+//! The tokens are read left to right. An option takes the token after it as
+//! its value, or the rest of its own token after `=`. `--` ends the options,
+//! and an operand that no positional argument takes either fails the parse or
+//! starts the remainder, when the command allows one.
+
+import Foundation
+
+/// Limits on the numbers the parser reads.
+namespace ArgumentLimit {
+    /// The longest number text taken.
+    ///
+    /// A `Number`'s mantissa holds any nineteen digits, and a longer text would
+    /// overflow it while being read.
+    let numberText: Number = 19
+}
+
+/// The tokens of a command line, taken one at a time.
+///
+/// An option takes the token after it as its value, so the parser and the
+/// option share one cursor.
+struct TokenStream {
+    /// Every token of the command line, in order.
+    let tokens: [String]
+    /// How many tokens have been taken so far.
+    var taken: Number = 0
+
+    /// Takes and returns the next token, or `.None` when all have been taken.
+    function next(borrow mut self) -> String? {
+        if self.taken >= self.tokens.count { return .None }
+        let token = self.tokens[self.taken]
+        self.taken += 1
+        return .Some(token)
+    }
+}
+
+/// What one pass over a command line has found so far.
+struct ParseState {
+    /// The name of the command being parsed. A subcommand replaces the root's name.
+    var command: String
+    /// The values found so far, in command-line order.
+    var values: [ParsedValue] = []
+    /// The operands kept after the first operand, for a command that allows a remainder.
+    var remainder: [String] = []
+    /// How many positional arguments have been filled.
+    var positionals: Number = 0
+    /// Whether `--`, or the start of the remainder, has been passed.
+    ///
+    /// Every token after it is an operand, whatever it starts with.
+    var operandsOnly: Bool = false
+
+    /// Returns whether the command line gave `name` a value.
+    function provided(name: borrow String) -> Bool {
+        for value in values {
+            if value.provided && value.name == name { return true }
+        }
+        return false
+    }
+
+    /// Records `text` as the value of `spec`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `.DuplicateArgument` when a non-repeating argument already has a
+    /// value, and `.InvalidValue` when `text` is not of the argument's kind or
+    /// choices.
+    function add(
+        borrow mut self,
+        spec: borrow ArgumentSpec,
+        text: borrow String
+    ) -> Result<Void, ArgumentError> {
+        match valueOf(spec, text) {
+            Some(value) -> {
+                if provided(spec.name) && !spec.isRepeated {
+                    return .Error(.DuplicateArgument(spec.name))
+                }
+                self.values.append(ParsedValue { name: spec.name, value: value, provided: true })
+                return .Ok
+            }
+            None -> return .Error(.InvalidValue(spec.name))
+        }
+    }
+}
+
+/// Splits a `--name` or `--name=value` token at its first `=`.
+///
+/// Returns the name, and the inline value when there is an `=`.
+function longOption(token: borrow String) -> (String, String?) {
+    let body = token.substring(2, token.count)
+    match body.indexOf("=") {
+        Some(equals) -> return (
+            body.substring(0, equals),
+            .Some(body.substring(equals + 1, body.count))
+        )
+        None -> return (body, .None)
+    }
+}
+
+/// Whether `token` is a long option: at least a name after `--`.
+function isLongToken(token: borrow String) -> Bool {
+    return token.count > 2 && token.startsWith("--")
+}
+
+/// Whether `token` is one or more short option letters after a single dash.
+function isShortToken(token: borrow String) -> Bool {
+    return token.count > 1 && token.startsWith("-") && !token.startsWith("--")
+}
+
+/// Whether `token` is an operand: neither an option nor the `--` separator.
+///
+/// A lone `-` is an operand, as it means standard input to many tools.
+function isOperand(token: borrow String) -> Bool {
+    return token != "--" && !isLongToken(token) && !isShortToken(token)
+}
+
+/// The value `text` gives `spec`, or `.None` when `spec` does not take it.
+///
+/// A value outside `spec`'s choices is refused, as is one that does not read as
+/// the argument's kind. A `Whole` value must have no fractional part.
+function valueOf(spec: borrow ArgumentSpec, text: borrow String) -> ArgumentValue? {
+    if spec.choices.count > 0 && !spec.choices.contains(text) { return .None }
+    match spec.value {
+        Text -> return .Some(.Text(text))
+        Boolean -> {
+            match text {
+                "true" -> return .Some(.Flag(true))
+                "false" -> return .Some(.Flag(false))
+                else -> return .None
+            }
+        }
+        Number -> {
+            match numberIn(text) {
+                Some(number) -> return .Some(.Number(number))
+                None -> return .None
+            }
+        }
+        Whole -> {
+            match numberIn(text) {
+                Some(number) -> {
+                    if floor(number) != number { return .None }
+                    return .Some(.Number(number))
+                }
+                None -> return .None
+            }
+        }
+    }
+}
+
+/// Reads `text` as a `Number`, or `.None` when it is too long or does not read.
+function numberIn(text: borrow String) -> Number? {
+    if text.count > ArgumentLimit.numberText { return .None }
+    return parseNumber(text)
+}
+
+/// Parses a command line against one command's schema.
+///
+/// `parse` reads the tokens left to right. An option takes the token after it
+/// as its value, or the rest of its own token after `=`, and `--` ends the
+/// options.
+///
+/// # Errors
+///
+/// Each [`ArgumentError`] case names the argument it concerns. For example,
+/// [`ArgumentError.UnknownOption`] is returned for a spelling the schema does
+/// not declare.
+///
+/// # Examples
+///
+/// ```kira
+/// let parser = Parser { command: Command {
+///     configuration: CommandConfiguration { name: "tool" },
+///     arguments: [flag("verbose", "Print more")]
+/// } }
+/// let parsed = parser.parse(["--verbose"])
+/// ```
+public struct Parser {
+    /// The schema this parser reads.
+    let command: Command
+
+    /// Returns the argument of `kind` whose long name or alias is `spelling`, or `.None`.
+    function argumentNamed(
+        borrow self,
+        spelling: borrow String,
+        kind: ArgumentKind
+    ) -> ArgumentSpec? {
+        for spec in self.command.arguments {
+            if spec.kind == kind && spec.isNamed(spelling) { return .Some(spec) }
+        }
+        return .None
+    }
+
+    /// Returns the argument of `kind` whose one-letter spelling is `letter`, or `.None`.
+    function argumentLettered(
+        borrow self,
+        letter: borrow String,
+        kind: ArgumentKind
+    ) -> ArgumentSpec? {
+        for spec in self.command.arguments {
+            if spec.kind == kind && spec.isShort(letter) { return .Some(spec) }
+        }
+        return .None
+    }
+
+    /// Returns the positional argument at `position`, counting from zero, or `.None`.
+    ///
+    /// `.None` is returned when the schema has fewer positional arguments.
+    function positional(borrow self, position: Number) -> ArgumentSpec? {
+        var found = 0
+        for spec in self.command.arguments {
+            if spec.kind != .Positional { continue }
+            if found == position { return .Some(spec) }
+            found += 1
+        }
+        return .None
+    }
+
+    /// Parses a command line against this command's schema.
+    ///
+    /// Returns the values the command line gave, with the defaults for those it
+    /// left out, and the remainder when the command allows one.
+    ///
+    /// # Errors
+    ///
+    /// - `.HelpRequested` or `.VersionRequested` when `-h`, `--help`, or `-V` and
+    ///   `--version` (on a command with a version) is given.
+    /// - `.UnknownOption` for a spelling the schema does not declare.
+    /// - `.MissingValue` when an option is last on the line, with no value after it.
+    /// - `.UnexpectedValue` for a flag given with `=value`.
+    /// - `.MissingArgument` for a required argument the line leaves out.
+    /// - `.InvalidValue` for a value that is not of its argument's kind or choices.
+    /// - `.DuplicateArgument` for a non-repeating argument given twice.
+    /// - `.UnexpectedArgument` for an operand no positional takes, when the command has no remainder.
+    function parse(borrow self, tokens: borrow [String]) -> Result<ParsedArguments, ArgumentError> {
+        var stream = TokenStream { tokens: tokens }
+        var state = ParseState { command: self.command.configuration.name }
+        while true {
+            match stream.next() {
+                Some(token) -> {
+                    match self.take(token, stream, state) {
+                        Ok -> continue
+                        Error(error) -> return .Error(error)
+                    }
+                }
+                None -> break
+            }
+        }
+        match self.fillDefaults(state) {
+            Ok -> return .Ok(
+                ParsedArguments {
+                    command: state.command,
+                    values: state.values,
+                    remainder: state.remainder
+                }
+            )
+            Error(error) -> return .Error(error)
+        }
+    }
+
+    /// Takes one token of the command line.
+    ///
+    /// The token is a help or version request, a subcommand name, the `--`
+    /// separator, an option, or an operand.
+    ///
+    /// # Errors
+    ///
+    /// Returns the failure of the option or operand the token starts.
+    function take(
+        borrow self,
+        token: borrow String,
+        stream: borrow mut TokenStream,
+        state: borrow mut ParseState
+    ) -> Result<Void, ArgumentError> {
+        if state.operandsOnly { return self.takeOperand(token, state) }
+        // A command listing subcommands for help names one first.
+        let configuration = self.command.configuration
+        if stream.taken == 1 && configuration.subcommands.count > 0 && isOperand(token) {
+            if !configuration.subcommands.contains(token) { return .Error(.UnknownCommand(token)) }
+            state.command = token
+            return .Ok
+        }
+        match token {
+            "--" -> {
+                state.operandsOnly = true
+                return .Ok
+            }
+            "--help", "-h" -> return .Error(.HelpRequested)
+            "--version", "-V" -> {
+                if configuration.version.isSome() { return .Error(.VersionRequested) }
+                return self.takeOption(token, stream, state)
+            }
+            else -> return self.takeOption(token, stream, state)
+        }
+    }
+
+    /// Takes a token that starts with a dash as a long or short option, or any other token as an operand.
+    function takeOption(
+        borrow self,
+        token: borrow String,
+        stream: borrow mut TokenStream,
+        state: borrow mut ParseState
+    ) -> Result<Void, ArgumentError> {
+        if isLongToken(token) { return self.takeLong(token, stream, state) }
+        if isShortToken(token) { return self.takeShort(token, stream, state) }
+        return self.takeOperand(token, state)
+    }
+
+    /// Takes a `--name` or `--name=value` token.
+    ///
+    /// A flag takes no value. An option takes the inline value after `=`, or
+    /// else the next token.
+    ///
+    /// # Errors
+    ///
+    /// Returns `.UnknownOption` for a name the schema does not declare,
+    /// `.UnexpectedValue` for a flag given `=value`, and the failure of the value.
+    function takeLong(
+        borrow self,
+        token: borrow String,
+        stream: borrow mut TokenStream,
+        state: borrow mut ParseState
+    ) -> Result<Void, ArgumentError> {
+        let (name, inline) = longOption(token)
+        match self.argumentNamed(name, .Option) {
+            Some(spec) -> {
+                match inline {
+                    Some(text) -> return state.add(spec, text)
+                    None -> return takeValue(spec, stream, state)
+                }
+            }
+            None -> {
+                match self.argumentNamed(name, .Flag) {
+                    Some(spec) -> {
+                        if inline.isSome() { return .Error(.UnexpectedValue(name)) }
+                        return state.add(spec, "true")
+                    }
+                    None -> return .Error(.UnknownOption("--\(name)"))
+                }
+            }
+        }
+    }
+
+    /// Takes a `-abc` token.
+    ///
+    /// Each letter is a flag until one is an option. That option's value is the
+    /// rest of the token, or the next token when the option is the last letter.
+    ///
+    /// # Errors
+    ///
+    /// Returns `.UnknownOption` for a letter the schema does not declare, and
+    /// the failure of the value an option takes.
+    function takeShort(
+        borrow self,
+        token: borrow String,
+        stream: borrow mut TokenStream,
+        state: borrow mut ParseState
+    ) -> Result<Void, ArgumentError> {
+        let letters = token.substring(1, token.count)
+        for at in 0..letters.count {
+            let letter = letters.substring(at, at + 1)
+            match self.argumentLettered(letter, .Option) {
+                Some(spec) -> {
+                    if at + 1 == letters.count { return takeValue(spec, stream, state) }
+                    var rest = letters.substring(at + 1, letters.count)
+                    if rest.startsWith("=") { rest = rest.substring(1, rest.count) }
+                    return state.add(spec, rest)
+                }
+                None -> {
+                    match self.argumentLettered(letter, .Flag) {
+                        Some(spec) -> {
+                            match state.add(spec, "true") {
+                                Ok -> continue
+                                Error(error) -> return .Error(error)
+                            }
+                        }
+                        None -> return .Error(.UnknownOption("-\(letter)"))
+                    }
+                }
+            }
+        }
+        return .Ok
+    }
+
+    /// Takes a token that is not an option.
+    ///
+    /// It fills the next positional argument. Once none is left, it is the
+    /// remainder when the command allows one, and an error when it does not.
+    ///
+    /// # Errors
+    ///
+    /// Returns `.UnexpectedArgument` when no positional takes the token and the
+    /// command has no remainder, and the failure of the positional's value.
+    function takeOperand(
+        borrow self,
+        token: borrow String,
+        state: borrow mut ParseState
+    ) -> Result<Void, ArgumentError> {
+        match self.positional(state.positionals) {
+            Some(spec) -> {
+                state.positionals += 1
+                return state.add(spec, token)
+            }
+            None -> {
+                if !self.command.configuration.allowsRemainder {
+                    return .Error(.UnexpectedArgument(token))
+                }
+                // The remainder runs to the end, as Swift's
+                // `.captureForPassthrough` and POSIX getopt's `+` do:
+                // `caffeinate -i date -u` hands `-u` to date, not to
+                // caffeinate.
+                state.remainder.append(token)
+                state.operandsOnly = true
+                return .Ok
+            }
+        }
+    }
+
+    /// Adds the default for each argument the command line left out.
+    ///
+    /// # Errors
+    ///
+    /// Returns `.MissingArgument` for a required argument the line left out, and
+    /// `.InvalidValue` when a default does not read as its argument's kind.
+    function fillDefaults(
+        borrow self,
+        state: borrow mut ParseState
+    ) -> Result<Void, ArgumentError> {
+        for spec in self.command.arguments {
+            if state.provided(spec.name) { continue }
+            if spec.isRequired { return .Error(.MissingArgument(spec.name)) }
+            match spec.defaultText {
+                Some(text) -> {
+                    match valueOf(spec, text) {
+                        Some(value) -> state.values.append(
+                            ParsedValue { name: spec.name, value: value, provided: false }
+                        )
+                        None -> return .Error(.InvalidValue(spec.name))
+                    }
+                }
+                None -> continue
+            }
+        }
+        return .Ok
+    }
+
+    /// Returns the text `-V` shows: the command's name and version, or just its name when it has no version.
+    function version(borrow self) -> String {
+        match self.command.configuration.version {
+            Some(version) -> return "\(self.command.configuration.name) \(version)"
+            None -> return self.command.configuration.name
+        }
+    }
+}
+
+/// Reads an option's value from the token after it.
+///
+/// # Errors
+///
+/// Returns `.MissingValue` when no token is left, and the failure of the value
+/// otherwise.
+function takeValue(
+    spec: borrow ArgumentSpec,
+    stream: borrow mut TokenStream,
+    state: borrow mut ParseState
+) -> Result<Void, ArgumentError> {
+    match stream.next() {
+        Some(text) -> return state.add(spec, text)
+        None -> return .Error(.MissingValue(spec.name))
+    }
+}

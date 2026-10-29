@@ -1,0 +1,37 @@
+import Foundation
+
+// The message each error shows, and which errors are a clean exit.
+
+@Test
+function everyErrorHasItsMessage() {
+    expect!(ArgumentError.UnknownCommand("deploy").description() == "unknown command: deploy")
+    expect!(ArgumentError.MissingValue("output").description() == "missing value for --output")
+    expect!(
+        ArgumentError.UnexpectedValue(
+            "verbose"
+        ).description() == "flag does not accept a value: --verbose"
+    )
+    expect!(
+        ArgumentError.MissingArgument("path").description() == "missing required argument: path"
+    )
+    expect!(
+        ArgumentError.DuplicateArgument(
+            "output"
+        ).description() == "argument may only be provided once: output"
+    )
+    expect!(ArgumentError.HelpRequested.description() == "help requested")
+    expect!(ArgumentError.VersionRequested.description() == "version requested")
+}
+
+@Test
+function onlyHelpAndVersionAreCleanExits() {
+    expect!(ArgumentError.HelpRequested.isCleanExit())
+    expect!(ArgumentError.VersionRequested.isCleanExit())
+    expect!(!ArgumentError.UnknownOption("--x").isCleanExit())
+    expect!(!ArgumentError.InvalidValue("jobs").isCleanExit())
+}
+
+@Test
+function usageExitStatusFollowsSysexits() {
+    expect!(ExitStatus.usage == 64)
+}
