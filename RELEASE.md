@@ -1,12 +1,8 @@
-# 26.10.4
+# 26.11.1
 
 **Project:** ArgumentParser  
-**Release week:** 2026-10-26 – 2026-11-01
+**Release week:** 2026-11-02 – 2026-11-08
 
 ## Highlights
 
-The first source release of ArgumentParser includes:
-
-- Schemas for positional arguments, options, flags, and their modifiers.
-- `@Derive(Parsable)` to project parsed arguments into typed Kira values.
-- Command execution and routing with help, version, and error handling.
+No changes to this package's source files have landed since the `26.10.4` release baseline. This weekly source release updates version metadata only where the package declares a version; it does not claim new functionality or fresh build validation.
